@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
 :root{
   --ink:#070B16; --panel:#0E1424; --panel2:#141B2E; --panel3:#1A2238;
@@ -275,6 +276,7 @@ main{padding-top:18px}
   .qline{grid-template-columns:1fr 50px 92px 30px}
   .drawer{width:100%}
   body{padding-bottom:110px}
+  nav.tabs{flex-wrap:wrap;overflow-x:visible}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 @media print{
@@ -418,9 +420,10 @@ const DAILY_TARGETS={doors:25,convos:12,mockups:3,quotes:1,closes:1};
 
 let S={
   leads:[], templates:[], quotes:[], cats:[...DEFAULT_CATS],
-  targets:{...DAILY_TARGETS}, monthGoal:150000
+  targets:{...DAILY_TARGETS}, monthGoal:150000, cloud:{url:'',key:''}
 };
-let tab='board', filter={stage:'all',cat:'all',q:''}, openLead=null, draftQuote=null;
+let tab='board', filter={stage:'all',cat:'all',batch:'all',q:''}, openLead=null, draftQuote=null;
+let cloudClient=null, cloudStatus='off', cloudLastSync=null;
 
 /* ============================================================
    HELPERS
@@ -445,10 +448,72 @@ function persist(){
     $('#saveState').textContent = ok
       ? (Store.mode==='memory'?'Session only — export!':'Saved locally')
       : 'Save failed — export now';
+    cloudPushDebounced();
   },350);
 }
 function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('on');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('on'),2200);}
 function log(lead,text){ (lead.log=lead.log||[]).unshift({ts:new Date().toISOString(),text}); }
+
+/* ============================================================
+   CLOUD SYNC (Supabase) — optional, off until the person pastes
+   their own project URL + anon key. Anon key is meant to be
+   public client-side; the RLS policy from the SQL below is what
+   actually gates access, not secrecy of this key.
+   ============================================================ */
+function leadToRow(l){
+  return {id:l.id,biz:l.biz||'',contact:l.contact||'',phone:l.phone||'',email:l.email||'',
+    cat:l.cat||'',area:l.area||'',maps:l.maps||'',batch:l.batch||'',source:l.source||'',
+    stage:l.stage||'pipeline',next:l.next||null,notes:l.notes||'',
+    upsells:l.upsells||[],sales:l.sales||[],log:l.log||[],
+    created_at:l.createdAt||new Date().toISOString(),updated_at:l.updatedAt||new Date().toISOString()};
+}
+function rowToLead(r){
+  return {id:r.id,biz:r.biz||'',contact:r.contact||'',phone:r.phone||'',email:r.email||'',
+    cat:r.cat||'',area:r.area||'',maps:r.maps||'',batch:r.batch||'',source:r.source||'',
+    stage:r.stage||'pipeline',next:r.next||'',notes:r.notes||'',
+    upsells:r.upsells||[],sales:r.sales||[],log:r.log||[],
+    createdAt:r.created_at||new Date().toISOString(),updatedAt:r.updated_at||new Date().toISOString()};
+}
+function initCloud(){
+  if(!S.cloud||!S.cloud.url||!S.cloud.key){ cloudClient=null; cloudStatus='off'; return false; }
+  if(typeof window.supabase==='undefined'){ cloudStatus='error'; return false; }
+  try{ cloudClient=window.supabase.createClient(S.cloud.url,S.cloud.key); cloudStatus='connected'; return true; }
+  catch(e){ cloudClient=null; cloudStatus='error'; return false; }
+}
+let cloudPushT;
+function cloudPushDebounced(){ if(!cloudClient) return; clearTimeout(cloudPushT); cloudPushT=setTimeout(cloudPush,700); }
+async function cloudPush(){
+  if(!cloudClient||!S.leads.length) return;
+  cloudStatus='syncing'; renderCloudStatus();
+  try{
+    const {error}=await cloudClient.from('leads').upsert(S.leads.map(leadToRow),{onConflict:'id'});
+    if(error) throw error;
+    cloudStatus='connected'; cloudLastSync=new Date();
+  }catch(e){ cloudStatus='error'; console.error('cloud push failed',e); }
+  renderCloudStatus();
+}
+async function cloudPull(silent){
+  if(!cloudClient) return;
+  cloudStatus='syncing'; renderCloudStatus();
+  try{
+    const {data,error}=await cloudClient.from('leads').select('*');
+    if(error) throw error;
+    const byId={}; S.leads.forEach(l=>byId[l.id]=l);
+    (data||[]).forEach(r=>{ byId[r.id]=rowToLead(r); });
+    S.leads=Object.values(byId).sort((a,b)=>(b.updatedAt||'')<(a.updatedAt||'')?-1:1);
+    cloudStatus='connected'; cloudLastSync=new Date();
+    await Store.save(S); render();
+    if(!silent) toast(`Pulled ${data?data.length:0} leads from cloud`);
+  }catch(e){ cloudStatus='error'; console.error('cloud pull failed',e); if(!silent) toast('Pull failed — check URL/key'); }
+  renderCloudStatus();
+}
+function renderCloudStatus(){
+  const el=$('#cloudStatus'); if(!el) return;
+  const label={off:'Not connected — leads stay on this device only',connected:'Connected — syncing automatically',syncing:'Syncing…',error:'Connection error — check URL/key'}[cloudStatus]||cloudStatus;
+  const when=cloudLastSync&&cloudStatus!=='syncing'?` · last synced ${cloudLastSync.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})}`:'';
+  el.textContent=label+when;
+  el.style.color=cloudStatus==='connected'?'var(--mint)':cloudStatus==='error'?'var(--rose)':'var(--muted)';
+}
 
 /* ============================================================
    RENDER — header
@@ -533,6 +598,7 @@ function leadCard(l){
         ${l.cat?`<span>${esc(l.cat)}</span>`:''}
         ${l.contact?`<span>· ${esc(l.contact)}</span>`:''}
         ${l.area?`<span>· ${esc(l.area)}</span>`:''}
+        ${l.batch?`<span>· 🗂 ${esc(l.batch)}</span>`:''}
         ${l.maps?`<a href="${esc(l.maps)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:var(--indigo-soft);text-decoration:none">· 📍 Navigate</a>`:''}
       </div>
       ${l.notes?`<div class="note">${esc(l.notes)}</div>`:''}
@@ -550,6 +616,7 @@ function viewBoard(){
   let rows=S.leads.filter(l=>{
     if(filter.stage!=='all'&&l.stage!==filter.stage) return false;
     if(filter.cat!=='all'&&l.cat!==filter.cat) return false;
+    if(filter.batch!=='all'&&(l.batch||'—')!==filter.batch) return false;
     if(q&&!(`${l.biz} ${l.contact} ${l.area} ${l.notes} ${l.phone}`.toLowerCase().includes(q))) return false;
     return true;
   });
@@ -557,6 +624,7 @@ function viewBoard(){
   rows.sort((a,b)=>(order[a.stage]-order[b.stage])||((b.updatedAt||'')<(a.updatedAt||'')?-1:1));
 
   const stageCount=id=>S.leads.filter(l=>l.stage===id).length;
+  const batches=[...new Set(S.leads.map(l=>l.batch||'—'))].sort();
   return `
   <div class="filters">
     <input class="search" id="q" placeholder="Search business, owner, area, phone…" value="${esc(filter.q)}">
@@ -564,6 +632,10 @@ function viewBoard(){
       <option value="all">All categories</option>
       ${S.cats.map(c=>`<option ${filter.cat===c?'selected':''}>${esc(c)}</option>`).join('')}
     </select>
+    ${batches.length?`<select class="search" id="batchFilter" style="flex:0 0 auto;min-width:150px">
+      <option value="all">All batches</option>
+      ${batches.map(b=>`<option ${filter.batch===b?'selected':''}>${esc(b)}</option>`).join('')}
+    </select>`:''}
   </div>
   <div class="chiprow">
     <button class="chip ${filter.stage==='all'?'on':''}" data-stage="all">All<span class="c">${S.leads.length}</span></button>
@@ -685,7 +757,34 @@ function viewData(){
   const dealRev=won.reduce((a,l)=>a+leadValue(l),0);
   const cashRev=allCashIn();
   const conv=S.leads.length?Math.round(won.length/S.leads.length*100):0;
+  const sql=`create table leads (
+  id text primary key, biz text, contact text, phone text, email text,
+  cat text, area text, maps text, batch text, source text, stage text,
+  next text, notes text, upsells jsonb, sales jsonb, log jsonb,
+  created_at timestamptz, updated_at timestamptz
+);
+alter table leads enable row level security;
+create policy "app access" on leads for all using (true) with check (true);`;
   return `
+  <div class="sectionhead"><h2>Cloud sync</h2><span class="hint">optional — share the pipeline across devices</span></div>
+  <div class="block">
+    <div id="cloudStatus" style="font-size:12.5px;color:var(--muted);margin-bottom:10px">${cloudStatus==='off'?'Not connected — leads stay on this device only':''}</div>
+    <div class="grid2">
+      <div class="field"><label>Supabase project URL</label><input id="cloudUrl" value="${esc(S.cloud.url)}" placeholder="https://xxxx.supabase.co"></div>
+      <div class="field"><label>Supabase anon public key</label><input id="cloudKey" value="${esc(S.cloud.key)}" placeholder="eyJhbGciOi..."></div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn primary sm" id="cloudConnect">Save & Connect</button>
+      <button class="btn sm" id="cloudSyncNow">Sync now</button>
+      <button class="btn ghost sm" id="cloudDisconnect">Disconnect</button>
+    </div>
+    <div style="font-size:11.5px;color:var(--muted);margin-top:12px;line-height:1.6">
+      Don't have a project yet? Free at <a href="https://supabase.com" target="_blank" rel="noopener">supabase.com</a> — new project, then Settings → API for the URL and anon key. Run this once in the SQL Editor to create the table:
+    </div>
+    <pre style="background:var(--ink);border:1px solid var(--line);border-radius:8px;padding:10px;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--muted);overflow-x:auto;margin-top:8px;white-space:pre">${esc(sql)}</pre>
+    <div style="font-size:11px;color:var(--muted);margin-top:6px">This anon key is designed to be public client-side — the SQL above is intentionally open (any device with the URL+key can read/write) so every phone stays in sync without a login step. Fine for an internal team tool; don't publish these credentials outside your team.</div>
+  </div>
+
   <div class="sectionhead"><h2>Numbers</h2></div>
   <div class="block">
     <div class="grid2">
@@ -726,6 +825,10 @@ function viewData(){
 
   <div class="sectionhead"><h2>Bulk import</h2><span class="hint">paste leads researched via Claude in Chrome</span></div>
   <div class="block">
+    <div class="field">
+      <label>Batch name</label>
+      <input id="bulkBatch" value="${esc(today())+' sweep'}" placeholder="e.g. 2026-08-13 Sector 63">
+    </div>
     <div class="field">
       <label>Paste JSON array of leads</label>
       <textarea id="bulkJson" placeholder='[{"biz":"...","cat":"Interior Design","area":"Sector 63","phone":"","notes":"No website — GMB only, 4.7★ / 95 reviews","source":"Scraped — Google Maps"}]' style="min-height:110px;font-family:'JetBrains Mono',monospace;font-size:12px"></textarea>
@@ -770,7 +873,7 @@ function render(){
 /* ============================================================
    LEAD DRAWER
    ============================================================ */
-function blankLead(){return{id:uid(),biz:'',contact:'',phone:'',email:'',cat:S.cats[0],area:'',maps:'',
+function blankLead(){return{id:uid(),biz:'',contact:'',phone:'',email:'',cat:S.cats[0],area:'',maps:'',batch:'',
   source:'Walk-in',stage:'pipeline',next:'',notes:'',upsells:[],sales:[],log:[],
   createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};}
 
@@ -951,6 +1054,22 @@ document.addEventListener('click',async e=>{
   }
 
   /* data tab */
+  if(t.id==='cloudConnect'){
+    const url=($('#cloudUrl').value||'').trim(), key=($('#cloudKey').value||'').trim();
+    if(!url||!key){ toast('Paste both the URL and the anon key'); return; }
+    S.cloud={url,key}; persist();
+    if(initCloud()){ toast('Connected — pulling existing leads…'); await cloudPull(); }
+    else toast('Could not connect — check the URL and key');
+    render(); return;
+  }
+  if(t.id==='cloudSyncNow'){
+    if(!cloudClient && !initCloud()){ toast('Not connected yet'); return; }
+    await cloudPull(); toast('Synced'); return;
+  }
+  if(t.id==='cloudDisconnect'){
+    S.cloud={url:'',key:''}; cloudClient=null; cloudStatus='off'; cloudLastSync=null;
+    persist(); render(); toast('Disconnected — leads stay local from now on'); return;
+  }
   if(t.id==='addCat'){
     const v=$('#newCat').value.trim(); if(!v) return;
     if(!S.cats.includes(v)) S.cats.push(v);
@@ -961,6 +1080,7 @@ document.addEventListener('click',async e=>{
   if(t.id==='bulkImport'){
     const raw=$('#bulkJson').value.trim();
     const status=$('#bulkStatus');
+    const batchName=($('#bulkBatch').value||'').trim()||today();
     if(!raw){ status.textContent='Paste something first'; status.style.color='var(--rose)'; return; }
     let arr;
     try{ arr=JSON.parse(raw); if(!Array.isArray(arr)) throw 0; }
@@ -981,18 +1101,19 @@ document.addEventListener('click',async e=>{
         cat:S.cats.includes(raw.cat)?raw.cat:(raw.cat||S.cats[0]),
         area:raw.area||'',
         maps:raw.maps||raw.maps_link||raw.mapsLink||'',
+        batch:raw.batch||batchName,
         source:raw.source||'Scraped — Google Maps',
         stage:'pipeline',
         notes:raw.notes||'',
       });
       if(l.cat && !S.cats.includes(l.cat)) S.cats.push(l.cat);
-      log(l,'Imported from research');
+      log(l,`Imported from research — batch "${l.batch}"`);
       S.leads.unshift(l);
       added++;
     });
     persist(); render();
     const el=$('#bulkStatus');
-    if(el){ el.style.color='var(--mint)'; el.textContent=`${added} added${skipped?`, ${skipped} duplicate skipped`:''}${bad?`, ${bad} missing a name`:''}`; }
+    if(el){ el.style.color='var(--mint)'; el.textContent=`${added} added to "${batchName}"${skipped?`, ${skipped} duplicate skipped`:''}${bad?`, ${bad} missing a name`:''}`; }
     toast(`${added} lead${added===1?'':'s'} added to pipeline`);
     return;
   }
@@ -1029,6 +1150,7 @@ document.addEventListener('input',e=>{
 document.addEventListener('change',e=>{
   const t=e.target;
   if(t.id==='catFilter'){ filter.cat=t.value; render(); }
+  if(t.id==='batchFilter'){ filter.batch=t.value; render(); }
   if(t.id==='qLead'&&draftQuote){ draftQuote.leadId=t.value; $('#qPreview').innerHTML=quoteHTML(draftQuote); }
   if(t.id==='bulkFile'&&t.files[0]){
     const r=new FileReader();
@@ -1079,8 +1201,8 @@ function download(name,content,type){
   setTimeout(()=>URL.revokeObjectURL(u),1500);
 }
 function toCSV(){
-  const head=['Business','Owner','Phone','Email','Category','Area','Maps link','Source','Stage','Next follow-up','Sold','Deal value','Cash received','Potential','Notes'];
-  const rows=S.leads.map(l=>[l.biz,l.contact,l.phone,l.email,l.cat,l.area,l.maps,l.source,l.stage,l.next,
+  const head=['Business','Owner','Phone','Email','Category','Area','Batch','Maps link','Source','Stage','Next follow-up','Sold','Deal value','Cash received','Potential','Notes'];
+  const rows=S.leads.map(l=>[l.biz,l.contact,l.phone,l.email,l.cat,l.area,l.batch,l.maps,l.source,l.stage,l.next,
     (l.sales||[]).map(s=>s.item).join(' | '),leadValue(l),leadCashIn(l),pipeValue(l),(l.notes||'').replace(/\n/g,' ')]);
   return [head,...rows].map(r=>r.map(c=>`"${String(c==null?'':c).replace(/"/g,'""')}"`).join(',')).join('\n');
 }
@@ -1107,7 +1229,12 @@ function toCSV(){
     if(!t.img && DEFAULT_THUMBS[t.url]){ t.img=DEFAULT_THUMBS[t.url]; backfilled=true; }
   });
   if(!saved || backfilled) await Store.save(S);
-  render();
+  if(S.cloud && S.cloud.url && S.cloud.key && initCloud()){
+    render();
+    await cloudPull(true);
+  } else {
+    render();
+  }
 })();
 </script>
 </body>
