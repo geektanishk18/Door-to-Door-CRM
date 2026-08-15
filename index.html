@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
 :root{
   --ink:#070B16; --panel:#0E1424; --panel2:#141B2E; --panel3:#1A2238;
@@ -456,9 +457,36 @@ let S={
   leads:[], templates:[], quotes:[], cats:[...DEFAULT_CATS],
   targets:{...DAILY_TARGETS}, monthGoal:150000
 };
-let tab='board', filter={stage:'all',cat:'all',batch:'all',q:''}, openLead=null, draftQuote=null;
+let tab='board', filter={stage:'all',cat:'all',batch:'all',area:'all',sort:'stage',archive:false,q:''}, openLead=null, draftQuote=null;
 let cloudClient=null, cloudStatus='off', cloudLastSync=null;
 let adminUsername='';
+let metricsRange=14;
+let activityLogTimer=null, activityLogBaseline=null;
+
+const FILTER_KEY='groundcontrol_filters_v1';
+function saveFilters(){ try{ localStorage.setItem(FILTER_KEY, JSON.stringify(filter)); }catch(e){} }
+function loadFilters(){ try{ const v=localStorage.getItem(FILTER_KEY); if(v) filter={...filter,...JSON.parse(v)}; }catch(e){} }
+
+const STAGE_ORDER={mockup:0,quoted:1,warm:2,outreached:3,pipeline:4,won:5,upsold:6,lost:7};
+function leadSector(l){
+  if(l&&l.sector) return String(l.sector);
+  const m=((l&&l.area)||'').match(/Sector\s*([0-9]+)/i);
+  return m?m[1]:'';
+}
+const SORTERS={
+  stage:(a,b)=>(STAGE_ORDER[a.stage]-STAGE_ORDER[b.stage])||((b.updatedAt||'')<(a.updatedAt||'')?-1:1),
+  updated:(a,b)=>(b.updatedAt||'')<(a.updatedAt||'')?-1:1,
+  addedNew:(a,b)=>(b.createdAt||'')<(a.createdAt||'')?-1:1,
+  addedOld:(a,b)=>(a.createdAt||'')<(b.createdAt||'')?-1:1,
+  contactedNew:(a,b)=>((b.firstContactedAt||b.createdAt||'')<(a.firstContactedAt||a.createdAt||'')?-1:1),
+  contactedOld:(a,b)=>((a.firstContactedAt||a.createdAt||'')<(b.firstContactedAt||b.createdAt||'')?-1:1),
+  followup:(a,b)=>{ if(!a.next&&!b.next) return 0; if(!a.next) return 1; if(!b.next) return -1; return a.next<b.next?-1:1; },
+  name:(a,b)=>(a.biz||'').localeCompare(b.biz||''),
+  sector:(a,b)=>{ const as=leadSector(a),bs=leadSector(b); if(!as&&!bs) return 0; if(!as) return 1; if(!bs) return -1; return Number(as)-Number(bs); }
+};
+const SORT_LABELS={stage:'Stage',updated:'Recently updated',addedNew:'Date added: newest',addedOld:'Date added: oldest',
+  contactedNew:'First contacted: newest',contactedOld:'First contacted: oldest',followup:'Follow-up: soonest first',
+  name:'Name: A–Z',sector:'Sector'};
 
 /* ============================================================
    HELPERS
@@ -504,6 +532,7 @@ function leadToRow(l){
     cat:l.cat||'',area:l.area||'',maps:l.maps||'',batch:l.batch||'',source:l.source||'',
     stage:l.stage||'pipeline',next:l.next||null,notes:l.notes||'',
     upsells:l.upsells||[],sales:l.sales||[],log:l.log||[],
+    deleted_at:l.deletedAt||null, first_contacted_at:l.firstContactedAt||null,
     created_at:l.createdAt||new Date().toISOString(),updated_at:l.updatedAt||new Date().toISOString()};
 }
 function rowToLead(r){
@@ -511,6 +540,7 @@ function rowToLead(r){
     cat:r.cat||'',area:r.area||'',maps:r.maps||'',batch:r.batch||'',source:r.source||'',
     stage:r.stage||'pipeline',next:r.next||'',notes:r.notes||'',
     upsells:r.upsells||[],sales:r.sales||[],log:r.log||[],
+    sector:r.sector||'', deletedAt:r.deleted_at||null, firstContactedAt:r.first_contacted_at||null,
     createdAt:r.created_at||new Date().toISOString(),updatedAt:r.updated_at||new Date().toISOString()};
 }
 function initCloud(){
@@ -532,9 +562,11 @@ async function cloudPush(){
     if(error) throw error;
     cloudStatus='connected'; cloudLastSync=new Date();
     cloudRetryDelay=2000; clearTimeout(cloudRetryTimer);
+    sawCloudError=false;
     setSyncState('saved');
   }catch(e){
     cloudStatus='error'; console.error('cloud push failed',e);
+    logCloudError('Cloud push failed',e);
     setSyncState('retrying'); scheduleCloudRetry();
   }
   renderCloudStatus();
@@ -549,10 +581,10 @@ async function cloudPull(silent){
     const byId={}; S.leads.forEach(l=>byId[l.id]=l);
     (data||[]).forEach(r=>{ byId[r.id]=rowToLead(r); });
     S.leads=Object.values(byId).sort((a,b)=>(b.updatedAt||'')<(a.updatedAt||'')?-1:1);
-    cloudStatus='connected'; cloudLastSync=new Date();
+    cloudStatus='connected'; cloudLastSync=new Date(); sawCloudError=false;
     await Store.save(S); render();
     if(!silent) toast(`Pulled ${data?data.length:0} leads from cloud`);
-  }catch(e){ cloudStatus='error'; console.error('cloud pull failed',e); if(!silent) toast('Pull failed — check your connection'); }
+  }catch(e){ cloudStatus='error'; console.error('cloud pull failed',e); logCloudError('Cloud pull failed',e); if(!silent) toast('Pull failed — check your connection'); }
   renderCloudStatus();
 }
 function renderCloudStatus(){
@@ -561,6 +593,64 @@ function renderCloudStatus(){
   const when=cloudLastSync&&cloudStatus!=='syncing'?` · last synced ${cloudLastSync.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})}`:'';
   el.textContent='Cloud sync: '+label+when;
   el.style.color=cloudStatus==='connected'?'var(--mint)':cloudStatus==='error'?'var(--rose)':'var(--muted)';
+}
+
+/* ============================================================
+   ACTIVITY LOG — canonical cross-lead audit trail in Supabase.
+   A short mirror of each event also lands in the lead's own
+   `log` jsonb array (via log()) so its drawer shows history
+   instantly without a join. Text-field edits are diffed against
+   a per-drawer-session baseline and coalesced on the same debounce
+   as autosave, so typing doesn't spam one row per keystroke.
+   ============================================================ */
+let sawCloudError=false;
+async function logActivity(action,opts){
+  opts=opts||{};
+  try{
+    if(!cloudClient && !initCloud()) return;
+    await cloudClient.from('activity_log').insert({
+      lead_id:opts.leadId||null, biz:opts.biz||null, action,
+      field:opts.field||null,
+      old_value:opts.oldValue!=null?String(opts.oldValue).slice(0,1000):null,
+      new_value:opts.newValue!=null?String(opts.newValue).slice(0,1000):null,
+      message:opts.message||null
+    });
+  }catch(e){ console.error('activity log write failed',e); }
+}
+function logCloudError(context,e){
+  const msg=context+' — '+((e&&e.message)||String(e));
+  if(sawCloudError) return; // avoid spamming one row per retry while offline
+  sawCloudError=true;
+  logActivity('error',{message:msg});
+}
+const FIELD_LABELS={biz:'Business name',contact:'Owner',phone:'Phone',email:'Email',cat:'Category',
+  area:'Area',maps:'Maps link',batch:'Batch',source:'Source',stage:'Stage',next:'Follow-up date',
+  notes:'Notes',upsells:'Upsells',sales:'Sales'};
+function diffAndLogLead(before,after){
+  if(!before){ logActivity('create',{leadId:after.id,biz:after.biz,message:'Lead added'}); return; }
+  Object.keys(FIELD_LABELS).forEach(f=>{
+    if(f==='stage') return; // stage changes are logged immediately at the click handler, not diffed here
+    const bv=Array.isArray(before[f])?JSON.stringify(before[f]):(before[f]||'');
+    const av=Array.isArray(after[f])?JSON.stringify(after[f]):(after[f]||'');
+    if(bv===av) return;
+    logActivity('update',{leadId:after.id,biz:after.biz,field:f,oldValue:bv,newValue:av,message:`${FIELD_LABELS[f]} changed`});
+    log(after,`${FIELD_LABELS[f]} updated`);
+  });
+}
+function scheduleActivityDiff(leadId){
+  clearTimeout(activityLogTimer);
+  activityLogTimer=setTimeout(()=>{
+    const cur=S.leads.find(x=>x.id===leadId); if(!cur) return;
+    diffAndLogLead(activityLogBaseline,cur);
+    activityLogBaseline={...cur};
+  },600);
+}
+function flushActivityDiff(){
+  clearTimeout(activityLogTimer); activityLogTimer=null;
+  if(!openLead) return;
+  const cur=S.leads.find(x=>x.id===openLead.id); if(!cur) return;
+  diffAndLogLead(activityLogBaseline,cur);
+  activityLogBaseline=null;
 }
 
 /* ============================================================
@@ -626,7 +716,7 @@ async function handleLogin(){
       if(error) throw error;
       row=data;
     }
-  }catch(e){ console.error('admin fetch failed',e); }
+  }catch(e){ console.error('admin fetch failed',e); logCloudError('Admin login fetch failed',e); }
   if(!row){
     const cached=getAdminCache();
     if(cached) row={username:cached.username,password_hash:cached.hash,password_salt:cached.salt};
@@ -652,10 +742,11 @@ async function handleSetup(){
   try{
     const {error}=await cloudClient.from('app_admin').insert({id:1,username:user,password_hash:hash,password_salt:salt});
     if(error) throw error;
-  }catch(e){ console.error('admin setup failed',e); renderGate('setup',{err:'Could not save — check your connection and try again'}); return; }
+  }catch(e){ console.error('admin setup failed',e); logCloudError('Admin setup failed',e); renderGate('setup',{err:'Could not save — check your connection and try again'}); return; }
   setAdminCache({username:user,hash,salt});
   adminUsername=user;
   setSession(true);
+  logActivity('create',{field:'app_admin',message:'Admin login created'});
   enterApp();
 }
 
@@ -725,6 +816,7 @@ function renderTabs(){
     ['follow','Follow-ups',due],
     ['templates','Templates',S.templates.length],
     ['quote','Quotation',null],
+    ['metrics','Metrics',null],
     ['data','Data',null]
   ];
   $('#tabs').innerHTML=tabs.map(([id,lab,n])=>
@@ -743,7 +835,9 @@ function leadCard(l){
     <div class="body">
       <div class="biz">${esc(l.biz||'Untitled')}
         <span class="pill ${['outreached','warm','mockup','quoted','won','upsold'].includes(l.stage)?l.stage:''}">${st?st.label:l.stage}</span>
+        ${leadSector(l)?`<span class="pill">Sector ${esc(leadSector(l))}</span>`:''}
         ${due?`<span class="pill due">follow up</span>`:''}
+        ${l.deletedAt?`<span class="pill" style="color:var(--rose)">Archived</span>`:''}
       </div>
       <div class="meta">
         ${l.cat?`<span>${esc(l.cat)}</span>`:''}
@@ -765,20 +859,34 @@ function leadCard(l){
 function viewBoard(){
   const q=filter.q.toLowerCase();
   let rows=S.leads.filter(l=>{
+    if(!filter.archive && l.deletedAt) return false;
     if(filter.stage!=='all'&&l.stage!==filter.stage) return false;
     if(filter.cat!=='all'&&l.cat!==filter.cat) return false;
     if(filter.batch!=='all'&&(l.batch||'—')!==filter.batch) return false;
-    if(q&&!(`${l.biz} ${l.contact} ${l.area} ${l.notes} ${l.phone}`.toLowerCase().includes(q))) return false;
+    if(filter.area!=='all'){
+      const sec=leadSector(l);
+      if(filter.area==='none'){ if(sec) return false; }
+      else if(sec!==filter.area) return false;
+    }
+    if(q){
+      const logText=(l.log||[]).map(g=>g.text).join(' ');
+      if(!(`${l.biz} ${l.contact} ${l.area} ${l.notes} ${l.phone} ${logText}`.toLowerCase().includes(q))) return false;
+    }
     return true;
   });
-  const order={mockup:0,quoted:1,warm:2,outreached:3,pipeline:4,won:5,upsold:6,lost:7};
-  rows.sort((a,b)=>(order[a.stage]-order[b.stage])||((b.updatedAt||'')<(a.updatedAt||'')?-1:1));
+  const sorter=SORTERS[filter.sort]||SORTERS.stage;
+  rows.sort(sorter);
 
-  const stageCount=id=>S.leads.filter(l=>l.stage===id).length;
+  const stageCount=id=>S.leads.filter(l=>l.stage===id&&(filter.archive||!l.deletedAt)).length;
   const batches=[...new Set(S.leads.map(l=>l.batch||'—'))].sort();
+  const visibleForSectors=S.leads.filter(l=>filter.archive||!l.deletedAt);
+  const sectorCounts={};
+  visibleForSectors.forEach(l=>{ const s=leadSector(l); if(s) sectorCounts[s]=(sectorCounts[s]||0)+1; });
+  const sectors=Object.keys(sectorCounts).sort((a,b)=>Number(a)-Number(b));
+  const isDefaultFilter=filter.stage==='all'&&filter.cat==='all'&&filter.batch==='all'&&filter.area==='all'&&filter.sort==='stage'&&!filter.archive&&!filter.q;
   return `
   <div class="filters">
-    <input class="search" id="q" placeholder="Search business, owner, area, phone…" value="${esc(filter.q)}">
+    <input class="search" id="q" placeholder="Search business, owner, area, phone, notes, history…" value="${esc(filter.q)}">
     <select class="search" id="catFilter" style="flex:0 0 auto;min-width:150px">
       <option value="all">All categories</option>
       ${S.cats.map(c=>`<option ${filter.cat===c?'selected':''}>${esc(c)}</option>`).join('')}
@@ -787,17 +895,31 @@ function viewBoard(){
       <option value="all">All batches</option>
       ${batches.map(b=>`<option ${filter.batch===b?'selected':''}>${esc(b)}</option>`).join('')}
     </select>`:''}
+    ${sectors.length?`<select class="search" id="areaFilter" style="flex:0 0 auto;min-width:150px">
+      <option value="all">All areas</option>
+      ${sectors.map(s=>`<option value="${s}" ${filter.area===s?'selected':''}>Sector ${s}</option>`).join('')}
+      <option value="none" ${filter.area==='none'?'selected':''}>No sector tagged</option>
+    </select>`:''}
+    <select class="search" id="sortSel" style="flex:0 0 auto;min-width:170px">
+      ${Object.keys(SORT_LABELS).map(k=>`<option value="${k}" ${filter.sort===k?'selected':''}>${SORT_LABELS[k]}</option>`).join('')}
+    </select>
+    <button class="btn sm ${filter.archive?'primary':'ghost'}" id="archiveToggle">${filter.archive?'Archive: ON':'Archive'}</button>
+    ${isDefaultFilter?'':'<button class="btn sm ghost" id="clearFilters">Clear filters</button>'}
   </div>
   <div class="chiprow">
     <button class="chip ${filter.stage==='all'?'on':''}" data-stage="all">All<span class="c">${S.leads.length}</span></button>
     ${STAGES.map(s=>`<button class="chip ${filter.stage===s.id?'on':''}" data-stage="${s.id}">${s.label}<span class="c">${stageCount(s.id)}</span></button>`).join('')}
   </div>
+  ${sectors.length?`<div class="chiprow">
+    <button class="chip ${filter.area==='all'?'on':''}" data-area="all">All areas</button>
+    ${sectors.map(s=>`<button class="chip ${filter.area===s?'on':''}" data-area="${s}">Sector ${s}<span class="c">${sectorCounts[s]}</span></button>`).join('')}
+  </div>`:''}
   ${rows.length?`<div class="leadlist">${rows.map(leadCard).join('')}</div>`
     :`<div class="empty"><b>Nothing here yet</b>Tap “Add lead” after every door you enter. Log it standing outside, not at night — you will forget.</div>`}`;
 }
 
 function viewFollow(){
-  const due=S.leads.filter(l=>l.next&&!['won','upsold','lost'].includes(l.stage))
+  const due=S.leads.filter(l=>l.next&&!l.deletedAt&&!['won','upsold','lost'].includes(l.stage))
     .sort((a,b)=>a.next<b.next?-1:1);
   const overdue=due.filter(l=>l.next<today());
   const now=due.filter(l=>l.next===today());
@@ -901,6 +1023,143 @@ function quoteHTML(q){
       Valid until ${until.toLocaleDateString('en-IN',{day:'numeric',month:'short'})}. Delivery begins on receipt of advance and brand assets.
     </div>
   </div>`;
+}
+
+/* ============================================================
+   METRICS — KPI trend charts, computed live from activity_log +
+   daily_manual_stats + leads. No hand-kept counters duplicated.
+   ============================================================ */
+let chartInstances={};
+function dayKey(iso){ return (iso||'').slice(0,10); }
+function lastNDays(n){
+  const days=[];
+  for(let i=n-1;i>=0;i--){ const d=new Date(); d.setDate(d.getDate()-i); days.push(d.toISOString().slice(0,10)); }
+  return days;
+}
+async function fetchMetricsData(){
+  if(!cloudClient && !initCloud()) return {activity:[],manual:[]};
+  try{
+    const since=new Date(Date.now()-45*864e5).toISOString();
+    const [act,man]=await Promise.all([
+      cloudClient.from('activity_log').select('*').gte('created_at',since),
+      cloudClient.from('daily_manual_stats').select('*')
+    ]);
+    return {activity:(act&&act.data)||[], manual:(man&&man.data)||[]};
+  }catch(e){ console.error('metrics fetch failed',e); logCloudError('Metrics fetch failed',e); return {activity:[],manual:[]}; }
+}
+function viewMetrics(){
+  const won2=S.leads.filter(l=>!l.deletedAt&&['won','upsold'].includes(l.stage));
+  const weekStart=new Date(); weekStart.setDate(weekStart.getDate()-weekStart.getDay());
+  const weekKey=weekStart.toISOString().slice(0,10);
+  const html=`
+  <div class="sectionhead"><h2>Metrics</h2><span class="hint">daily field activity & KPI trends — computed live, nothing hand-kept</span></div>
+
+  <div class="block">
+    <h4 style="margin:0 0 10px;font-size:10.5px;text-transform:uppercase;letter-spacing:.11em;color:var(--muted)">Log today's field activity</h4>
+    <div class="grid2">
+      <div class="field"><label>Doors knocked today</label><input id="mDoors" type="number" value="0"></div>
+      <div class="field"><label>Owner conversations today</label><input id="mConvos" type="number" value="0"></div>
+    </div>
+    <button class="btn primary sm" id="mSaveDaily">Log today's numbers</button>
+    <span id="mDailyStatus" style="font-size:12px;color:var(--muted);margin-left:8px"></span>
+  </div>
+
+  <div class="sectionhead"><h2>Daily trend</h2>
+    <div class="right">
+      <button class="btn sm ${metricsRange===14?'primary':'ghost'}" data-mrange="14">14d</button>
+      <button class="btn sm ${metricsRange===30?'primary':'ghost'}" data-mrange="30">30d</button>
+    </div>
+  </div>
+  <div class="block"><canvas id="chartTrend" height="110"></canvas></div>
+
+  <div class="sectionhead"><h2>Funnel snapshot</h2><span class="hint">leads currently in each stage</span></div>
+  <div class="block"><canvas id="chartFunnel" height="110"></canvas></div>
+
+  <div class="sectionhead"><h2>Cumulative revenue</h2><span class="hint">running total, deal value at close</span></div>
+  <div class="block"><canvas id="chartRevenue" height="110"></canvas></div>
+
+  <div class="sectionhead"><h2>This week vs. floor</h2></div>
+  <div class="block" id="weekReadout">Loading…</div>`;
+  setTimeout(()=>renderMetricsCharts(weekKey),0);
+  return html;
+}
+async function renderMetricsCharts(weekKey){
+  const {activity,manual}=await fetchMetricsData();
+  if(tab!=='metrics') return; // user navigated away while this was loading
+  if(typeof Chart==='undefined'){
+    ['chartTrend','chartFunnel','chartRevenue'].forEach(id=>{
+      const el=$('#'+id); if(el&&el.parentElement) el.parentElement.innerHTML='<div class="empty" style="padding:16px"><b>Charts unavailable</b>Chart.js failed to load — check your connection and reload.</div>';
+    });
+  }
+  const manualByDate={}; manual.forEach(m=>{ manualByDate[m.date]=m; });
+  const today0=today();
+  const todayManual=manualByDate[today0];
+  const dEl=$('#mDoors'), cEl=$('#mConvos');
+  if(dEl&&todayManual) dEl.value=todayManual.doors||0;
+  if(cEl&&todayManual) cEl.value=todayManual.convos||0;
+
+  const days=lastNDays(metricsRange);
+  const stageEvents=activity.filter(a=>a.action==='update'&&a.field==='stage');
+  const countOn=(day,stageId)=>stageEvents.filter(a=>dayKey(a.created_at)===day&&a.new_value===stageId).length;
+  const doorsSeries=days.map(d=>(manualByDate[d]&&manualByDate[d].doors)||0);
+  const convosSeries=days.map(d=>(manualByDate[d]&&manualByDate[d].convos)||0);
+  const mockupSeries=days.map(d=>countOn(d,'mockup'));
+  const quoteSeries=days.map(d=>countOn(d,'quoted'));
+  const closeSeries=days.map(d=>countOn(d,'won')+countOn(d,'upsold'));
+
+  const trendCtx=$('#chartTrend');
+  if(trendCtx){
+    if(chartInstances.trend) chartInstances.trend.destroy();
+    chartInstances.trend=new Chart(trendCtx,{type:'line',data:{labels:days.map(d=>d.slice(5)),datasets:[
+      {label:'Doors',data:doorsSeries,borderColor:'#6366F1',backgroundColor:'transparent',tension:.3},
+      {label:'Owner talks',data:convosSeries,borderColor:'#818CF8',backgroundColor:'transparent',tension:.3},
+      {label:'Mockups',data:mockupSeries,borderColor:'#38BDF8',backgroundColor:'transparent',tension:.3},
+      {label:'Quotes',data:quoteSeries,borderColor:'#FBBF24',backgroundColor:'transparent',tension:.3},
+      {label:'Closes',data:closeSeries,borderColor:'#34D399',backgroundColor:'transparent',tension:.3}
+    ]},options:{responsive:true,plugins:{legend:{labels:{color:'#868FAB'}}},
+      scales:{x:{ticks:{color:'#868FAB'},grid:{color:'#232C45'}},y:{ticks:{color:'#868FAB'},grid:{color:'#232C45'},beginAtZero:true}}}});
+  }
+
+  const funnelCtx=$('#chartFunnel');
+  if(funnelCtx){
+    if(chartInstances.funnel) chartInstances.funnel.destroy();
+    const live=S.leads.filter(l=>!l.deletedAt);
+    const counts=STAGES.map(s=>live.filter(l=>l.stage===s.id).length);
+    chartInstances.funnel=new Chart(funnelCtx,{type:'bar',data:{labels:STAGES.map(s=>s.label),datasets:[
+      {label:'Leads',data:counts,backgroundColor:'#6366F1'}
+    ]},options:{responsive:true,plugins:{legend:{display:false}},
+      scales:{x:{ticks:{color:'#868FAB'},grid:{display:false}},y:{ticks:{color:'#868FAB'},grid:{color:'#232C45'},beginAtZero:true}}}});
+  }
+
+  const revCtx=$('#chartRevenue');
+  if(revCtx){
+    if(chartInstances.revenue) chartInstances.revenue.destroy();
+    const closeEvents=activity.filter(a=>a.action==='update'&&a.field==='stage'&&(a.new_value==='won'||a.new_value==='upsold'))
+      .sort((a,b)=>a.created_at<b.created_at?-1:1);
+    const byId={}; S.leads.forEach(l=>byId[l.id]=l);
+    let running=0; const revDays=[], revVals=[];
+    closeEvents.forEach(ev=>{
+      const lead=byId[ev.lead_id]; if(!lead) return;
+      running+=leadValue(lead);
+      revDays.push(dayKey(ev.created_at)); revVals.push(running);
+    });
+    chartInstances.revenue=new Chart(revCtx,{type:'line',data:{labels:revDays,datasets:[
+      {label:'Cumulative deal value',data:revVals,borderColor:'#34D399',backgroundColor:'rgba(52,211,153,.12)',fill:true,tension:.3}
+    ]},options:{responsive:true,plugins:{legend:{display:false}},
+      scales:{x:{ticks:{color:'#868FAB'},grid:{color:'#232C45'}},y:{ticks:{color:'#868FAB',callback:v=>shortInr(v)},grid:{color:'#232C45'}}}}});
+  }
+
+  const readout=$('#weekReadout');
+  if(readout){
+    const weekCloses=activity.filter(a=>a.action==='update'&&a.field==='stage'&&(a.new_value==='won'||a.new_value==='upsold')&&a.created_at>=weekKey).length;
+    const weekRev=S.leads.filter(l=>['won','upsold'].includes(l.stage)&&(l.updatedAt||'')>=weekKey).reduce((a,l)=>a+leadValue(l),0);
+    const floorCloses=2, floorRev=50000;
+    readout.innerHTML=`
+      <div class="grid2">
+        <div><div class="total" style="border:0;padding:0;margin:0"><span class="lab">Closes this week</span><span class="num" style="color:${weekCloses>=floorCloses?'var(--mint)':'var(--text)'}">${weekCloses} / ${floorCloses}</span></div></div>
+        <div><div class="total" style="border:0;padding:0;margin:0"><span class="lab">Revenue this week</span><span class="num" style="color:${weekRev>=floorRev?'var(--mint)':'var(--text)'}">${inr(weekRev)} / ${inr(floorRev)}</span></div></div>
+      </div>`;
+  }
 }
 
 function viewData(){
@@ -1012,6 +1271,7 @@ function render(){
     : tab==='follow'?viewFollow()
     : tab==='templates'?viewTemplates()
     : tab==='quote'?viewQuote()
+    : tab==='metrics'?viewMetrics()
     : viewData();
   $('#fab').style.display = (tab==='board'||tab==='follow')?'block':'none';
   if(tab==='data') renderCloudStatus();
@@ -1026,11 +1286,12 @@ function blankLead(){return{id:uid(),biz:'',contact:'',phone:'',email:'',cat:S.c
 
 function openDrawer(lead,isNew){
   openLead={...lead,upsells:[...(lead.upsells||[])],sales:(lead.sales||[]).map(s=>({...s})),log:[...(lead.log||[])],_new:!!isNew};
+  activityLogBaseline=isNew?null:{...lead};
   $('#drawerTitle').textContent=isNew?'New lead':(lead.biz||'Lead');
   drawDrawer();
   $('#scrim').classList.add('on'); $('#drawer').classList.add('on');
 }
-function closeDrawer(){$('#scrim').classList.remove('on');$('#drawer').classList.remove('on');openLead=null;}
+function closeDrawer(){flushActivityDiff();$('#scrim').classList.remove('on');$('#drawer').classList.remove('on');openLead=null;}
 
 function drawDrawer(){
   const l=openLead; if(!l) return;
@@ -1105,7 +1366,7 @@ function drawDrawer(){
 
   $('#drawerFoot').innerHTML=`
     <button class="btn primary" id="saveLead" style="flex:1">${l._new?'Add lead':'Save'}</button>
-    ${l._new?'':'<button class="btn danger" id="delLead">Delete</button>'}`;
+    ${l._new?'':(l.deletedAt?'<button class="btn" id="restoreLead">Restore</button>':'<button class="btn danger" id="delLead">Archive</button>')}`;
 }
 
 // Writes the drawer's working copy into S.leads and schedules a save —
@@ -1124,6 +1385,7 @@ function syncOpenLead(){
   } else {
     S.leads[ix]=clean;
   }
+  scheduleActivityDiff(clean.id);
   l._new=false;
   persist();
   return true;
@@ -1141,12 +1403,16 @@ function commitLead(){
    EVENTS
    ============================================================ */
 document.addEventListener('click',async e=>{
-  const t=e.target.closest('[data-tab],[data-lead],[data-stage],[data-setstage],[data-up],[data-snooze],[data-sdel],[data-qdel],[data-preset],[data-deltpl],[data-copy],[data-delcat],[data-mockup],button,a');
+  const t=e.target.closest('[data-tab],[data-lead],[data-stage],[data-area],[data-mrange],[data-setstage],[data-up],[data-snooze],[data-sdel],[data-qdel],[data-preset],[data-deltpl],[data-copy],[data-delcat],[data-mockup],button,a');
   if(!t) return;
   const d=t.dataset||{};
 
   if(d.tab){ tab=d.tab; if(tab==='quote'&&!draftQuote) draftQuote={id:null,leadId:'',items:[],disc:0,note:'',valid:7}; render(); return; }
-  if(d.stage){ filter.stage=d.stage; render(); return; }
+  if(d.stage){ filter.stage=d.stage; saveFilters(); render(); return; }
+  if(d.area){ filter.area=d.area; saveFilters(); render(); return; }
+  if(d.mrange){ metricsRange=Number(d.mrange); render(); return; }
+  if(t.id==='archiveToggle'){ filter.archive=!filter.archive; saveFilters(); render(); return; }
+  if(t.id==='clearFilters'){ filter={stage:'all',cat:'all',batch:'all',area:'all',sort:'stage',archive:false,q:''}; saveFilters(); render(); return; }
   if(d.lead){ const l=S.leads.find(x=>x.id===d.lead); if(l) openDrawer(l,false); return; }
 
   /* drawer interactions */
@@ -1154,6 +1420,8 @@ document.addEventListener('click',async e=>{
     if(openLead.stage!==d.setstage){
       const to=STAGES.find(s=>s.id===d.setstage).label;
       log(openLead,`Stage → ${to}`);
+      logActivity('update',{leadId:openLead.id,biz:openLead.biz,field:'stage',oldValue:openLead.stage,newValue:d.setstage,message:`Stage → ${to}`});
+      if(openLead.stage==='pipeline'&&d.setstage!=='pipeline'&&!openLead.firstContactedAt) openLead.firstContactedAt=new Date().toISOString();
       openLead.stage=d.setstage;
       if((d.setstage==='warm'||d.setstage==='mockup')&&!openLead.next){const n=new Date();n.setDate(n.getDate()+1);openLead.next=n.toISOString().slice(0,10);}
     }
@@ -1178,7 +1446,19 @@ document.addEventListener('click',async e=>{
   if(t.id==='addSale'&&openLead){ openLead.sales.push({item:'',amount:0,received:0,date:today()}); syncOpenLead(); drawDrawer(); return; }
   if(t.id==='saveLead'){ commitLead(); return; }
   if(t.id==='delLead'&&openLead){
-    if(confirm('Delete this lead permanently?')){ S.leads=S.leads.filter(x=>x.id!==openLead.id); persist(); closeDrawer(); render(); toast('Lead deleted'); }
+    if(confirm('Archive this lead? It will be hidden from the board but stays recoverable in Archive view — nothing is permanently destroyed.')){
+      openLead.deletedAt=new Date().toISOString();
+      log(openLead,'Archived (soft delete)');
+      logActivity('delete',{leadId:openLead.id,biz:openLead.biz,message:'Lead archived'});
+      syncOpenLead(); closeDrawer(); render(); toast('Lead archived');
+    }
+    return;
+  }
+  if(t.id==='restoreLead'&&openLead){
+    openLead.deletedAt=null;
+    log(openLead,'Restored from archive');
+    logActivity('update',{leadId:openLead.id,biz:openLead.biz,field:'deleted_at',message:'Lead restored from archive'});
+    syncOpenLead(); closeDrawer(); render(); toast('Lead restored');
     return;
   }
   if(t.id==='drawerClose'||t.id==='scrim'){ closeDrawer(); return; }
@@ -1218,6 +1498,21 @@ document.addEventListener('click',async e=>{
     return;
   }
 
+  /* metrics tab */
+  if(t.id==='mSaveDaily'){
+    const doors=Number($('#mDoors').value)||0, convos=Number($('#mConvos').value)||0;
+    const status=$('#mDailyStatus');
+    status.textContent='Saving…'; status.style.color='var(--muted)';
+    try{
+      if(!cloudClient && !initCloud()) throw new Error('offline');
+      const {error}=await cloudClient.from('daily_manual_stats').upsert({date:today(),doors,convos,updated_at:new Date().toISOString()},{onConflict:'date'});
+      if(error) throw error;
+      status.textContent='Saved'; status.style.color='var(--mint)';
+      renderMetricsCharts(new Date(new Date().setDate(new Date().getDate()-new Date().getDay())).toISOString().slice(0,10));
+    }catch(e){ console.error('daily stats save failed',e); logCloudError('Daily stats save failed',e); status.textContent='Could not save — check your connection'; status.style.color='var(--rose)'; }
+    return;
+  }
+
   /* data tab */
   if(t.id==='logoutBtn'){
     setSession(false); toast('Logged out'); location.reload(); return;
@@ -1245,10 +1540,11 @@ document.addEventListener('click',async e=>{
       if(upErr) throw upErr;
       adminUsername=username;
       setAdminCache({username,hash,salt});
+      logActivity('update',{field:'app_admin',message:'Admin login credentials changed'});
       toast('Admin login updated');
       render();
       const s2=$('#pwStatus'); if(s2){ s2.textContent='Login updated'; s2.style.color='var(--mint)'; }
-    }catch(e){ console.error('password update failed',e); status.textContent='Could not update — check your connection and try again'; status.style.color='var(--rose)'; }
+    }catch(e){ console.error('password update failed',e); logCloudError('Admin password update failed',e); status.textContent='Could not update — check your connection and try again'; status.style.color='var(--rose)'; }
     return;
   }
   if(t.id==='addCat'){
@@ -1289,10 +1585,12 @@ document.addEventListener('click',async e=>{
       });
       if(l.cat && !S.cats.includes(l.cat)) S.cats.push(l.cat);
       log(l,`Imported from research — batch "${l.batch}"`);
+      logActivity('create',{leadId:l.id,biz:l.biz,message:`Imported — batch "${l.batch}"`});
       S.leads.unshift(l);
       added++;
     });
     persist(); render();
+    if(added) logActivity('create',{field:'batch_summary',message:`Bulk import — batch "${batchName}": ${added} lead(s) added${skipped?`, ${skipped} duplicate(s) skipped`:''}`});
     const el=$('#bulkStatus');
     if(el){ el.style.color='var(--mint)'; el.textContent=`${added} added to "${batchName}"${skipped?`, ${skipped} duplicate skipped`:''}${bad?`, ${bad} missing a name`:''}`; }
     toast(`${added} lead${added===1?'':'s'} added to pipeline`);
@@ -1302,7 +1600,8 @@ document.addEventListener('click',async e=>{
   if(t.id==='expCsv'){ download('leads-'+today()+'.csv',toCSV(),'text/csv'); return; }
   if(t.id==='impBtn'){ $('#impFile').click(); return; }
   if(t.id==='reset'){
-    if(confirm('Wipe all leads, templates and quotes? Export first.')){
+    if(confirm('Wipe all leads, templates and quotes on this device? Export first.')){
+      logActivity('delete',{message:`Reset everything triggered — ${S.leads.length} lead(s), ${S.templates.length} template(s) cleared locally`});
       S={leads:[],templates:[],quotes:[],cats:[...DEFAULT_CATS],targets:{...DAILY_TARGETS},monthGoal:150000};
       persist(); render(); toast('Reset done');
     } return;
@@ -1331,8 +1630,10 @@ document.addEventListener('input',e=>{
 
 document.addEventListener('change',e=>{
   const t=e.target;
-  if(t.id==='catFilter'){ filter.cat=t.value; render(); }
-  if(t.id==='batchFilter'){ filter.batch=t.value; render(); }
+  if(t.id==='catFilter'){ filter.cat=t.value; saveFilters(); render(); }
+  if(t.id==='batchFilter'){ filter.batch=t.value; saveFilters(); render(); }
+  if(t.id==='areaFilter'){ filter.area=t.value; saveFilters(); render(); }
+  if(t.id==='sortSel'){ filter.sort=t.value; saveFilters(); render(); }
   if(t.id==='qLead'&&draftQuote){ draftQuote.leadId=t.value; $('#qPreview').innerHTML=quoteHTML(draftQuote); }
   if(t.id==='bulkFile'&&t.files[0]){
     const r=new FileReader();
@@ -1393,6 +1694,7 @@ function toCSV(){
    BOOT
    ============================================================ */
 (async function init(){
+  loadFilters();
   const saved=await Store.load();
   if(saved) S={...S,...saved,cats:(saved.cats&&saved.cats.length)?saved.cats:DEFAULT_CATS,targets:{...DAILY_TARGETS,...(saved.targets||{})}};
   else {
