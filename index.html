@@ -43,7 +43,7 @@ header.top{
   backdrop-filter:blur(14px);
   border-bottom:1px solid var(--line);
 }
-.brandbar{display:flex;align-items:center;gap:12px;padding:14px 0 10px}
+.brandbar{display:flex;align-items:center;gap:12px;padding:16px 0 14px}
 .mark{
   width:32px;height:32px;border-radius:9px;flex:none;
   background:linear-gradient(135deg,var(--indigo),#4F46E5);
@@ -56,12 +56,12 @@ header.top{
 .dot{width:6px;height:6px;border-radius:50%;background:var(--mint);box-shadow:0 0 8px var(--mint)}
 
 /* ---------- signature: money rail ---------- */
-.cashhero{padding:2px 0 10px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.cashhero{padding:8px 0 14px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
 .cashhero .chn{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:30px;line-height:1;color:var(--mint)}
 .cashhero .chl{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);font-weight:600}
 .cashhero .cht{font-size:12px;color:var(--muted);font-family:'JetBrains Mono',monospace}
 .cashhero .cht.up{color:var(--mint)}
-.rail{padding:2px 0 14px}
+.rail{padding:4px 0 20px}
 .railbar{
   display:flex;height:38px;border-radius:10px;overflow:hidden;
   border:1px solid var(--line);background:var(--panel);
@@ -79,7 +79,7 @@ header.top{
 .railseg.empty{color:var(--muted);background:transparent}
 
 /* ---------- today strip ---------- */
-.today{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;padding-bottom:14px}
+.today{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;padding-bottom:20px}
 .kpi{
   background:var(--panel);border:1px solid var(--line);border-radius:12px;
   padding:9px 10px;position:relative;overflow:hidden;
@@ -103,7 +103,7 @@ nav.tabs::-webkit-scrollbar{display:none}
 .tab .badge{font-family:'JetBrains Mono',monospace;font-size:10px;opacity:.6;margin-left:5px}
 
 /* ---------- generic ---------- */
-main{padding-top:18px}
+main{padding-top:28px}
 .sectionhead{display:flex;align-items:baseline;gap:10px;margin:0 0 12px}
 .sectionhead h2{font-size:15px}
 .sectionhead .hint{font-size:12px;color:var(--muted)}
@@ -254,6 +254,25 @@ main{padding-top:18px}
 .qdoc .grand{font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#0B1020}
 .qdoc .fine{font-size:11px;color:#6B7280;line-height:1.6;margin-top:16px;border-top:1px solid #E5E7EB;padding-top:12px}
 
+/* ---------- auth gate ---------- */
+.authgate{
+  position:fixed;inset:0;z-index:100;display:none;align-items:center;justify-content:center;
+  background:radial-gradient(80% 60% at 50% 0%,rgba(99,102,241,.14),transparent),var(--ink);
+  padding:20px;
+}
+.gatecard{
+  width:100%;max-width:360px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  padding:28px 24px;text-align:center;box-shadow:0 24px 60px -20px rgba(0,0,0,.6);
+}
+.gatecard h2{font-size:19px;margin-bottom:6px}
+.gatecard .hint{font-size:12.5px;color:var(--muted);margin:0 0 18px;line-height:1.5}
+.gatecard .field{text-align:left}
+.gatecard .btn{margin-top:6px}
+.gateerr{
+  background:rgba(248,113,113,.12);border:1px solid #4A2436;color:var(--rose);
+  border-radius:8px;padding:8px 10px;font-size:12.5px;margin-bottom:12px;text-align:left;
+}
+
 /* ---------- fab ---------- */
 .fab{
   position:fixed;right:18px;bottom:22px;z-index:50;
@@ -290,6 +309,9 @@ main{padding-top:18px}
 </head>
 <body>
 
+<div id="authGate" class="authgate"></div>
+
+<div id="appRoot" style="display:none">
 <header class="top">
   <div class="wrap">
     <div class="brandbar">
@@ -298,7 +320,7 @@ main{padding-top:18px}
         <h1>Ground Control</h1>
         <div class="sub">Field CRM</div>
       </div>
-      <div class="savechip"><span class="dot"></span><span id="saveState">Saved locally</span></div>
+      <div class="savechip"><span class="dot"></span><span id="saveState">Saved</span></div>
     </div>
 
     <div class="cashhero" id="cashHero"></div>
@@ -329,8 +351,20 @@ main{padding-top:18px}
 
 <div class="toast" id="toast"></div>
 <div id="printroot"></div>
+</div>
 
 <script>
+/* ============================================================
+   BUILT-IN SUPABASE CONNECTION
+   Hardcoded on purpose — every device connects automatically,
+   no paste-a-key setup screen. See CLAUDE.md for the security
+   tradeoffs of an embedded anon key + open RLS policy.
+   ============================================================ */
+const SUPABASE_URL='https://dopkxkhwjgezzbkinzio.supabase.co';
+const SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRvcGt4a2h3amdlenpia2luemlvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY1MzQzNTIsImV4cCI6MjEwMjExMDM1Mn0.l97uZGfY7MtTCr4qNDfvZAX8n-eZKWomKM2ZpEHmoU4';
+const SESSION_KEY='groundcontrol_session_v1';
+const ADMIN_CACHE_KEY='groundcontrol_admin_cache_v1';
+
 /* ============================================================
    STORAGE LAYER
    Works in three environments, in priority order:
@@ -420,10 +454,11 @@ const DAILY_TARGETS={doors:25,convos:12,mockups:3,quotes:1,closes:1};
 
 let S={
   leads:[], templates:[], quotes:[], cats:[...DEFAULT_CATS],
-  targets:{...DAILY_TARGETS}, monthGoal:150000, cloud:{url:'',key:''}
+  targets:{...DAILY_TARGETS}, monthGoal:150000
 };
 let tab='board', filter={stage:'all',cat:'all',batch:'all',q:''}, openLead=null, draftQuote=null;
 let cloudClient=null, cloudStatus='off', cloudLastSync=null;
+let adminUsername='';
 
 /* ============================================================
    HELPERS
@@ -442,21 +477,25 @@ const pipeValue=l=>(l.upsells||[]).reduce((a,id)=>{const u=UPSELLS.find(x=>x.id=
 let saveT;
 function persist(){
   clearTimeout(saveT);
-  $('#saveState').textContent='Saving…';
+  setSyncState('saving');
   saveT=setTimeout(async()=>{
-    const ok=await Store.save(S);
-    $('#saveState').textContent = ok
-      ? (Store.mode==='memory'?'Session only — export!':'Saved locally')
-      : 'Save failed — export now';
-    cloudPushDebounced();
-  },350);
+    await Store.save(S);
+    cloudPush();
+  },500);
+}
+function setSyncState(state){
+  const el=$('#saveState'); if(!el) return;
+  const map={saving:'Saving…',saved:'Saved',retrying:'Sync failed — retrying',offline:'Offline — will sync when back'};
+  el.textContent = map[state] || state;
+  const dot=el.parentElement&&el.parentElement.querySelector('.dot');
+  if(dot) dot.style.background = state==='saved' ? 'var(--mint)' : (state==='saving' ? 'var(--amber)' : 'var(--rose)');
 }
 function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('on');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('on'),2200);}
 function log(lead,text){ (lead.log=lead.log||[]).unshift({ts:new Date().toISOString(),text}); }
 
 /* ============================================================
-   CLOUD SYNC (Supabase) — optional, off until the person pastes
-   their own project URL + anon key. Anon key is meant to be
+   CLOUD SYNC (Supabase) — always on. Connects with the built-in
+   URL/key above, no setup step. The anon key is meant to be
    public client-side; the RLS policy from the SQL below is what
    actually gates access, not secrecy of this key.
    ============================================================ */
@@ -475,25 +514,34 @@ function rowToLead(r){
     createdAt:r.created_at||new Date().toISOString(),updatedAt:r.updated_at||new Date().toISOString()};
 }
 function initCloud(){
-  if(!S.cloud||!S.cloud.url||!S.cloud.key){ cloudClient=null; cloudStatus='off'; return false; }
-  if(typeof window.supabase==='undefined'){ cloudStatus='error'; return false; }
-  try{ cloudClient=window.supabase.createClient(S.cloud.url,S.cloud.key); cloudStatus='connected'; return true; }
+  if(typeof window.supabase==='undefined'){ cloudClient=null; cloudStatus='error'; return false; }
+  try{ cloudClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY); cloudStatus='connected'; return true; }
   catch(e){ cloudClient=null; cloudStatus='error'; return false; }
 }
-let cloudPushT;
-function cloudPushDebounced(){ if(!cloudClient) return; clearTimeout(cloudPushT); cloudPushT=setTimeout(cloudPush,700); }
+let cloudRetryTimer=null, cloudRetryDelay=2000;
+function scheduleCloudRetry(){
+  clearTimeout(cloudRetryTimer);
+  cloudRetryTimer=setTimeout(()=>{ cloudRetryDelay=Math.min(cloudRetryDelay*2,30000); cloudPush(); },cloudRetryDelay);
+}
 async function cloudPush(){
-  if(!cloudClient||!S.leads.length) return;
+  if(!cloudClient && !initCloud()){ setSyncState('retrying'); scheduleCloudRetry(); return; }
+  if(navigator.onLine===false){ setSyncState('offline'); scheduleCloudRetry(); return; }
   cloudStatus='syncing'; renderCloudStatus();
   try{
     const {error}=await cloudClient.from('leads').upsert(S.leads.map(leadToRow),{onConflict:'id'});
     if(error) throw error;
     cloudStatus='connected'; cloudLastSync=new Date();
-  }catch(e){ cloudStatus='error'; console.error('cloud push failed',e); }
+    cloudRetryDelay=2000; clearTimeout(cloudRetryTimer);
+    setSyncState('saved');
+  }catch(e){
+    cloudStatus='error'; console.error('cloud push failed',e);
+    setSyncState('retrying'); scheduleCloudRetry();
+  }
   renderCloudStatus();
 }
+window.addEventListener('online',()=>{ cloudRetryDelay=2000; cloudPush(); });
 async function cloudPull(silent){
-  if(!cloudClient) return;
+  if(!cloudClient && !initCloud()) return;
   cloudStatus='syncing'; renderCloudStatus();
   try{
     const {data,error}=await cloudClient.from('leads').select('*');
@@ -504,15 +552,118 @@ async function cloudPull(silent){
     cloudStatus='connected'; cloudLastSync=new Date();
     await Store.save(S); render();
     if(!silent) toast(`Pulled ${data?data.length:0} leads from cloud`);
-  }catch(e){ cloudStatus='error'; console.error('cloud pull failed',e); if(!silent) toast('Pull failed — check URL/key'); }
+  }catch(e){ cloudStatus='error'; console.error('cloud pull failed',e); if(!silent) toast('Pull failed — check your connection'); }
   renderCloudStatus();
 }
 function renderCloudStatus(){
   const el=$('#cloudStatus'); if(!el) return;
-  const label={off:'Not connected — leads stay on this device only',connected:'Connected — syncing automatically',syncing:'Syncing…',error:'Connection error — check URL/key'}[cloudStatus]||cloudStatus;
+  const label={off:'Not connected',connected:'Connected — syncing automatically',syncing:'Syncing…',error:'Connection error — retrying in background'}[cloudStatus]||cloudStatus;
   const when=cloudLastSync&&cloudStatus!=='syncing'?` · last synced ${cloudLastSync.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})}`:'';
-  el.textContent=label+when;
+  el.textContent='Cloud sync: '+label+when;
   el.style.color=cloudStatus==='connected'?'var(--mint)':cloudStatus==='error'?'var(--rose)':'var(--muted)';
+}
+
+/* ============================================================
+   ADMIN LOGIN — client-side salted SHA-256, gates the UI only.
+   See CLAUDE.md for the honest scope of what this does and does
+   not protect against.
+   ============================================================ */
+async function sha256Hex(str){
+  const buf=await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+function randomSalt(){
+  const arr=new Uint8Array(16); crypto.getRandomValues(arr);
+  return Array.from(arr).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+async function hashPassword(pass,salt){ return sha256Hex(salt+'::'+pass); }
+function hasSession(){ try{ return localStorage.getItem(SESSION_KEY)==='1'; }catch(e){ return false; } }
+function setSession(on){ try{ on?localStorage.setItem(SESSION_KEY,'1'):localStorage.removeItem(SESSION_KEY); }catch(e){} }
+function getAdminCache(){ try{ const v=localStorage.getItem(ADMIN_CACHE_KEY); return v?JSON.parse(v):null; }catch(e){ return null; } }
+function setAdminCache(obj){ try{ localStorage.setItem(ADMIN_CACHE_KEY, JSON.stringify(obj)); }catch(e){} }
+
+function renderGate(mode,opts){
+  const err=(opts&&opts.err)||'';
+  const user=(opts&&opts.user)||'';
+  const gate=$('#authGate');
+  gate.innerHTML = mode==='setup' ? `
+    <div class="gatecard">
+      <div class="mark" style="margin:0 auto 14px">G</div>
+      <h2>Set up your admin login</h2>
+      <p class="hint">One-time setup — this becomes the login on this device and every other device that opens Ground Control.</p>
+      <div class="field"><label>Username</label><input id="gateUser" value="admin" autocomplete="username"></div>
+      <div class="field"><label>Password</label><input id="gatePass" type="password" autocomplete="new-password"></div>
+      <div class="field"><label>Confirm password</label><input id="gatePass2" type="password" autocomplete="new-password"></div>
+      ${err?`<div class="gateerr">${esc(err)}</div>`:''}
+      <button class="btn primary" id="gateSubmit" style="width:100%">Create admin login</button>
+    </div>` : `
+    <div class="gatecard">
+      <div class="mark" style="margin:0 auto 14px">G</div>
+      <h2>Ground Control</h2>
+      <p class="hint">Sign in to continue</p>
+      <div class="field"><label>Username</label><input id="gateUser" value="${esc(user)}" autocomplete="username"></div>
+      <div class="field"><label>Password</label><input id="gatePass" type="password" autocomplete="current-password"></div>
+      ${err?`<div class="gateerr">${esc(err)}</div>`:''}
+      <button class="btn primary" id="gateSubmit" style="width:100%">Log in</button>
+    </div>`;
+  const submit=()=> mode==='setup' ? handleSetup() : handleLogin();
+  $('#gateSubmit').addEventListener('click',submit);
+  gate.querySelectorAll('input[type="password"]').forEach(el=>el.addEventListener('keydown',e=>{ if(e.key==='Enter') submit(); }));
+  const focusTarget = user ? gate.querySelector('#gatePass') : gate.querySelector('#gateUser');
+  if(focusTarget) focusTarget.focus();
+}
+
+async function handleLogin(){
+  const user=($('#gateUser').value||'').trim();
+  const pass=$('#gatePass').value||'';
+  if(!user||!pass){ renderGate('login',{err:'Enter username and password'}); return; }
+  const btn=$('#gateSubmit'); if(btn){ btn.disabled=true; btn.textContent='Checking…'; }
+  let row=null;
+  try{
+    if(!cloudClient) initCloud();
+    if(cloudClient){
+      const {data,error}=await cloudClient.from('app_admin').select('*').eq('id',1).maybeSingle();
+      if(error) throw error;
+      row=data;
+    }
+  }catch(e){ console.error('admin fetch failed',e); }
+  if(!row){
+    const cached=getAdminCache();
+    if(cached) row={username:cached.username,password_hash:cached.hash,password_salt:cached.salt};
+  }
+  if(!row){ renderGate('login',{err:'Cannot reach the server to verify login — check your connection and try again',user}); return; }
+  const hash=await hashPassword(pass,row.password_salt);
+  if(user!==row.username || hash!==row.password_hash){ renderGate('login',{err:'Incorrect username or password',user}); return; }
+  setAdminCache({username:row.username,hash:row.password_hash,salt:row.password_salt});
+  adminUsername=row.username;
+  setSession(true);
+  enterApp();
+}
+
+async function handleSetup(){
+  const user=($('#gateUser').value||'admin').trim()||'admin';
+  const pass=$('#gatePass').value||'';
+  const pass2=$('#gatePass2').value||'';
+  if(pass.length<6){ renderGate('setup',{err:'Password must be at least 6 characters'}); return; }
+  if(pass!==pass2){ renderGate('setup',{err:'Passwords do not match'}); return; }
+  if(!cloudClient && !initCloud()){ renderGate('setup',{err:'Cannot reach the server — check your connection and reload'}); return; }
+  const salt=randomSalt();
+  const hash=await hashPassword(pass,salt);
+  try{
+    const {error}=await cloudClient.from('app_admin').insert({id:1,username:user,password_hash:hash,password_salt:salt});
+    if(error) throw error;
+  }catch(e){ console.error('admin setup failed',e); renderGate('setup',{err:'Could not save — check your connection and try again'}); return; }
+  setAdminCache({username:user,hash,salt});
+  adminUsername=user;
+  setSession(true);
+  enterApp();
+}
+
+function enterApp(){
+  $('#authGate').style.display='none';
+  $('#appRoot').style.display='block';
+  render();
+  if(cloudClient) cloudPull(true);
 }
 
 /* ============================================================
@@ -757,32 +908,27 @@ function viewData(){
   const dealRev=won.reduce((a,l)=>a+leadValue(l),0);
   const cashRev=allCashIn();
   const conv=S.leads.length?Math.round(won.length/S.leads.length*100):0;
-  const sql=`create table leads (
-  id text primary key, biz text, contact text, phone text, email text,
-  cat text, area text, maps text, batch text, source text, stage text,
-  next text, notes text, upsells jsonb, sales jsonb, log jsonb,
-  created_at timestamptz, updated_at timestamptz
-);
-alter table leads enable row level security;
-create policy "app access" on leads for all using (true) with check (true);`;
   return `
-  <div class="sectionhead"><h2>Cloud sync</h2><span class="hint">optional — share the pipeline across devices</span></div>
+  <div class="sectionhead"><h2>Account</h2><span class="hint">signed in as ${esc(adminUsername||'admin')}</span>
+    <div class="right"><button class="btn danger sm" id="logoutBtn">Log out</button></div>
+  </div>
   <div class="block">
-    <div id="cloudStatus" style="font-size:12.5px;color:var(--muted);margin-bottom:10px">${cloudStatus==='off'?'Not connected — leads stay on this device only':''}</div>
+    <div id="cloudStatus" style="font-size:12.5px;color:var(--muted);margin-bottom:6px"></div>
+    <div style="font-size:11.5px;color:var(--muted);line-height:1.6">
+      Ground Control connects automatically to the built-in Supabase project — nothing to paste, nothing to configure. Every edit on this device syncs to every other device signed in with the same admin login.
+    </div>
+  </div>
+
+  <div class="sectionhead"><h2>Change admin login</h2><span class="hint">takes effect immediately, on every device</span></div>
+  <div class="block">
+    <div class="field"><label>Current password</label><input id="curPass" type="password" autocomplete="current-password"></div>
     <div class="grid2">
-      <div class="field"><label>Supabase project URL</label><input id="cloudUrl" value="${esc(S.cloud.url)}" placeholder="https://xxxx.supabase.co"></div>
-      <div class="field"><label>Supabase anon public key</label><input id="cloudKey" value="${esc(S.cloud.key)}" placeholder="eyJhbGciOi..."></div>
+      <div class="field"><label>New username (optional)</label><input id="newUser" placeholder="leave blank to keep current"></div>
+      <div class="field"><label>New password</label><input id="newPass" type="password" autocomplete="new-password"></div>
     </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn primary sm" id="cloudConnect">Save & Connect</button>
-      <button class="btn sm" id="cloudSyncNow">Sync now</button>
-      <button class="btn ghost sm" id="cloudDisconnect">Disconnect</button>
-    </div>
-    <div style="font-size:11.5px;color:var(--muted);margin-top:12px;line-height:1.6">
-      Don't have a project yet? Free at <a href="https://supabase.com" target="_blank" rel="noopener">supabase.com</a> — new project, then Settings → API for the URL and anon key. Run this once in the SQL Editor to create the table:
-    </div>
-    <pre style="background:var(--ink);border:1px solid var(--line);border-radius:8px;padding:10px;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--muted);overflow-x:auto;margin-top:8px;white-space:pre">${esc(sql)}</pre>
-    <div style="font-size:11px;color:var(--muted);margin-top:6px">This anon key is designed to be public client-side — the SQL above is intentionally open (any device with the URL+key can read/write) so every phone stays in sync without a login step. Fine for an internal team tool; don't publish these credentials outside your team.</div>
+    <div class="field"><label>Confirm new password</label><input id="newPass2" type="password" autocomplete="new-password"></div>
+    <div id="pwStatus" style="font-size:12px;margin-bottom:8px"></div>
+    <button class="btn primary sm" id="savePw">Update login</button>
   </div>
 
   <div class="sectionhead"><h2>Numbers</h2></div>
@@ -868,6 +1014,7 @@ function render(){
     : tab==='quote'?viewQuote()
     : viewData();
   $('#fab').style.display = (tab==='board'||tab==='follow')?'block':'none';
+  if(tab==='data') renderCloudStatus();
 }
 
 /* ============================================================
@@ -961,15 +1108,33 @@ function drawDrawer(){
     ${l._new?'':'<button class="btn danger" id="delLead">Delete</button>'}`;
 }
 
+// Writes the drawer's working copy into S.leads and schedules a save —
+// called on every meaningful edit (not just the Save button) so nothing
+// typed into the drawer only lives in memory.
+function syncOpenLead(){
+  const l=openLead; if(!l) return false;
+  if(!l.biz||!l.biz.trim()) return false;
+  l.updatedAt=new Date().toISOString();
+  const ix=S.leads.findIndex(x=>x.id===l.id);
+  const clean={...l}; delete clean._new;
+  if(ix<0){
+    clean.log=clean.log||[];
+    if(!clean.log.some(g=>g.text==='Lead added')) clean.log.unshift({ts:new Date().toISOString(),text:'Lead added'});
+    S.leads.unshift(clean);
+  } else {
+    S.leads[ix]=clean;
+  }
+  l._new=false;
+  persist();
+  return true;
+}
+
 function commitLead(){
   const l=openLead; if(!l) return;
   if(!l.biz.trim()){toast('Business name is required');return;}
-  l.updatedAt=new Date().toISOString();
-  const {_new,...clean}=l;
-  const ix=S.leads.findIndex(x=>x.id===l.id);
-  if(ix<0){ clean.log=clean.log||[]; clean.log.unshift({ts:new Date().toISOString(),text:'Lead added'}); S.leads.unshift(clean); }
-  else S.leads[ix]=clean;
-  persist(); closeDrawer(); render(); toast(_new?'Lead added':'Saved');
+  const wasNew=l._new;
+  syncOpenLead();
+  closeDrawer(); render(); toast(wasNew?'Lead added':'Saved');
 }
 
 /* ============================================================
@@ -992,25 +1157,25 @@ document.addEventListener('click',async e=>{
       openLead.stage=d.setstage;
       if((d.setstage==='warm'||d.setstage==='mockup')&&!openLead.next){const n=new Date();n.setDate(n.getDate()+1);openLead.next=n.toISOString().slice(0,10);}
     }
-    drawDrawer(); return;
+    syncOpenLead(); drawDrawer(); return;
   }
   if(d.up&&openLead){
     const i=openLead.upsells.indexOf(d.up);
     i<0?openLead.upsells.push(d.up):openLead.upsells.splice(i,1);
-    drawDrawer(); return;
+    syncOpenLead(); drawDrawer(); return;
   }
   if(d.snooze&&openLead){
     const n=new Date(); n.setDate(n.getDate()+Number(d.snooze));
-    openLead.next=n.toISOString().slice(0,10); drawDrawer(); return;
+    openLead.next=n.toISOString().slice(0,10); syncOpenLead(); drawDrawer(); return;
   }
   if(t.hasAttribute('data-mockup')&&openLead){
     log(openLead,'Mockup delivered');
     if(['pipeline','outreached','warm'].includes(openLead.stage)){ openLead.stage='mockup'; log(openLead,'Stage → Mockup Pending'); }
     if(!openLead.next){ const n=new Date(); n.setDate(n.getDate()+1); openLead.next=n.toISOString().slice(0,10); }
-    drawDrawer(); toast('Mockup logged'); return;
+    syncOpenLead(); drawDrawer(); toast('Mockup logged'); return;
   }
-  if(d.sdel!=null&&openLead){ openLead.sales.splice(Number(d.sdel),1); drawDrawer(); return; }
-  if(t.id==='addSale'&&openLead){ openLead.sales.push({item:'',amount:0,received:0,date:today()}); drawDrawer(); return; }
+  if(d.sdel!=null&&openLead){ openLead.sales.splice(Number(d.sdel),1); syncOpenLead(); drawDrawer(); return; }
+  if(t.id==='addSale'&&openLead){ openLead.sales.push({item:'',amount:0,received:0,date:today()}); syncOpenLead(); drawDrawer(); return; }
   if(t.id==='saveLead'){ commitLead(); return; }
   if(t.id==='delLead'&&openLead){
     if(confirm('Delete this lead permanently?')){ S.leads=S.leads.filter(x=>x.id!==openLead.id); persist(); closeDrawer(); render(); toast('Lead deleted'); }
@@ -1054,21 +1219,37 @@ document.addEventListener('click',async e=>{
   }
 
   /* data tab */
-  if(t.id==='cloudConnect'){
-    const url=($('#cloudUrl').value||'').trim(), key=($('#cloudKey').value||'').trim();
-    if(!url||!key){ toast('Paste both the URL and the anon key'); return; }
-    S.cloud={url,key}; persist();
-    if(initCloud()){ toast('Connected — pulling existing leads…'); await cloudPull(); }
-    else toast('Could not connect — check the URL and key');
-    render(); return;
+  if(t.id==='logoutBtn'){
+    setSession(false); toast('Logged out'); location.reload(); return;
   }
-  if(t.id==='cloudSyncNow'){
-    if(!cloudClient && !initCloud()){ toast('Not connected yet'); return; }
-    await cloudPull(); toast('Synced'); return;
-  }
-  if(t.id==='cloudDisconnect'){
-    S.cloud={url:'',key:''}; cloudClient=null; cloudStatus='off'; cloudLastSync=null;
-    persist(); render(); toast('Disconnected — leads stay local from now on'); return;
+  if(t.id==='savePw'){
+    const cur=$('#curPass').value||'';
+    const newUser=($('#newUser').value||'').trim();
+    const newPass=$('#newPass').value||'';
+    const newPass2=$('#newPass2').value||'';
+    const status=$('#pwStatus');
+    if(!cur){ status.textContent='Enter your current password'; status.style.color='var(--rose)'; return; }
+    if(newPass.length<6){ status.textContent='New password must be at least 6 characters'; status.style.color='var(--rose)'; return; }
+    if(newPass!==newPass2){ status.textContent='New passwords do not match'; status.style.color='var(--rose)'; return; }
+    status.textContent='Checking…'; status.style.color='var(--muted)';
+    try{
+      if(!cloudClient && !initCloud()) throw new Error('offline');
+      const {data,error}=await cloudClient.from('app_admin').select('*').eq('id',1).maybeSingle();
+      if(error||!data) throw error||new Error('no admin row');
+      const curHash=await hashPassword(cur,data.password_salt);
+      if(curHash!==data.password_hash){ status.textContent='Current password is incorrect'; status.style.color='var(--rose)'; return; }
+      const salt=randomSalt();
+      const hash=await hashPassword(newPass,salt);
+      const username=newUser||data.username;
+      const {error:upErr}=await cloudClient.from('app_admin').update({username,password_hash:hash,password_salt:salt,updated_at:new Date().toISOString()}).eq('id',1);
+      if(upErr) throw upErr;
+      adminUsername=username;
+      setAdminCache({username,hash,salt});
+      toast('Admin login updated');
+      render();
+      const s2=$('#pwStatus'); if(s2){ s2.textContent='Login updated'; s2.style.color='var(--mint)'; }
+    }catch(e){ console.error('password update failed',e); status.textContent='Could not update — check your connection and try again'; status.style.color='var(--rose)'; }
+    return;
   }
   if(t.id==='addCat'){
     const v=$('#newCat').value.trim(); if(!v) return;
@@ -1130,8 +1311,9 @@ document.addEventListener('click',async e=>{
 
 document.addEventListener('input',e=>{
   const t=e.target,d=t.dataset||{};
-  if(d.f&&openLead&&d.si==null&&d.qi==null){ openLead[d.f]=t.value; return; }
+  if(d.f&&openLead&&d.si==null&&d.qi==null){ openLead[d.f]=t.value; syncOpenLead(); return; }
   if(d.si!=null&&openLead){ openLead.sales[Number(d.si)][d.f]=(d.f==='amount'||d.f==='received')?Number(t.value):t.value;
+    syncOpenLead();
     const elA=document.getElementById('saleTotal'); if(elA) elA.textContent=inr(leadValue(openLead));
     const elC=document.getElementById('cashTotal'); if(elC) elC.textContent=inr(leadCashIn(openLead));
     return; }
@@ -1229,12 +1411,26 @@ function toCSV(){
     if(!t.img && DEFAULT_THUMBS[t.url]){ t.img=DEFAULT_THUMBS[t.url]; backfilled=true; }
   });
   if(!saved || backfilled) await Store.save(S);
-  if(S.cloud && S.cloud.url && S.cloud.key && initCloud()){
-    render();
-    await cloudPull(true);
-  } else {
-    render();
+
+  initCloud();
+  const cached=getAdminCache();
+  if(cached) adminUsername=cached.username;
+
+  if(hasSession()){
+    enterApp();
+    return;
   }
+
+  $('#authGate').style.display='flex';
+  let hasAdmin=false;
+  try{
+    if(cloudClient){
+      const {data,error}=await cloudClient.from('app_admin').select('id').eq('id',1).maybeSingle();
+      if(!error && data) hasAdmin=true;
+    }
+  }catch(e){ console.error('admin lookup failed',e); }
+  if(!hasAdmin && cached) hasAdmin=true;
+  renderGate(hasAdmin?'login':'setup');
 })();
 </script>
 </body>
