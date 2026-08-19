@@ -41,6 +41,12 @@ that possible.
   one file. No build step, no `package.json`, no bundler.
 - **Backend:** Supabase Postgres, accessed via `@supabase/supabase-js@2` loaded from a CDN
   `<script>` tag (no npm install). Charts use Chart.js, also via CDN.
+- **Background jobs:** one Supabase Edge Function (`send-reminders`, Deno) on a `pg_cron`
+  schedule — see "PWA & background push reminders" below. Managed through the Supabase
+  dashboard/MCP, not part of the static site build.
+- **PWA shell:** `manifest.webmanifest` + `service-worker.js` at the repo root, icons under
+  `icons/` (regenerate with `node scripts/generate-icons.js`, requires `npm i @napi-rs/canvas`
+  locally first — that dependency is not committed).
 - **Repo:** `geektanishk18/Door-to-Door-CRM` on GitHub.
 - **Deploy:** Netlify, auto-deploying on push to `main` (or whichever branch is wired to the
   Netlify site — check the Netlify dashboard if unsure). Live at
@@ -106,6 +112,51 @@ funnel/revenue charts are built on. See "Logging" below for exactly what trigger
 a lead row (a closed door, a no-show, a five-second brushoff), so they can't be derived from
 `leads`/`activity_log` the way mockups/quotes/closes can. The Metrics tab has a small
 today-only input at the top that upserts into this table.
+
+### `push_subscriptions` — one row per device with reminders turned on
+| column | notes |
+|---|---|
+| id | uuid PK |
+| endpoint | unique — the browser's push endpoint URL, identifies the device/browser install |
+| p256dh, auth | the device's Web Push encryption keys, from `PushSubscription.toJSON().keys` |
+| ua | `navigator.userAgent`, for debugging which device a row belongs to |
+| created_at, last_seen_at | timestamps |
+
+Same open RLS as everything else. Written by the client (`subscribePush()` in `index.html`)
+when someone turns on reminders in the Data tab or the header bell icon; read only by the
+`send-reminders` edge function. Rows for endpoints that start rejecting pushes (410/404,
+i.e. the browser un-registered the subscription) are deleted automatically by that function.
+
+### `app_secrets` — server-only, id=1 singleton
+Holds `vapid_public` / `vapid_private`, the Web Push VAPID keypair. RLS is enabled with **no
+policies at all**, so it is unreachable from the client via PostgREST/anon key — only the
+`send-reminders` edge function's service-role key (which bypasses RLS) can read it. This is
+the one table in this project that is deliberately *not* open — see Security scope in
+CLAUDE.md for why everything else is.
+
+### `leads.last_reminder_pushed_on`
+Extra column on `leads` (date, nullable). Set by `send-reminders` to today's date once a push
+has gone out for that lead's due/overdue follow-up, so the cron job doesn't re-notify for the
+same lead on every 15-minute run. Cleared implicitly the next day (comparison is `!== today`).
+
+## PWA & background push reminders
+
+Ground Control is installable (Add to Home Screen on iOS Safari / Chrome's install prompt on
+Android/desktop) via `manifest.webmanifest` + `service-worker.js` at the repo root, both
+referenced from `index.html`'s `<head>`. The service worker's only jobs are caching the app
+shell for instant/offline load and receiving `push` events — it does not intercept Supabase or
+CDN requests, so sync/auth behavior is unaffected.
+
+Reminders are real background push, not just an in-app banner: a Supabase Edge Function
+(`send-reminders`) runs on a `pg_cron` schedule every 15 minutes, finds leads whose follow-up
+is due today or overdue, and sends a Web Push notification (via the `web-push` npm package,
+VAPID-signed) to every subscribed device — this fires even if the app/browser is fully closed,
+as long as it was installed and reminders were turned on once. See the table docs above for
+`push_subscriptions` / `app_secrets` / `last_reminder_pushed_on`, and
+`supabase/migrations` (applied via the Supabase MCP, not checked into this repo as files) for
+the exact cron/extension setup. Local notifications (falling back to nothing when a device
+lacks Push API support, e.g. very old iOS) are the honest limitation here — flag it if a device
+turns out not to support it.
 
 ## The 8-stage funnel
 

@@ -31,8 +31,30 @@ Tables (all with the same open RLS policy, `using(true) with check(true)`):
   autosave so it isn't one row per keystroke. This is what the Metrics tab reads from.
 - `daily_manual_stats` — one row per day, `doors`/`convos` counts logged manually from the
   Metrics tab (the two field-activity numbers that don't reliably produce a lead row).
+- `push_subscriptions` — one row per device with reminder notifications turned on (open RLS,
+  same as above).
+- `app_secrets` — singleton row holding the Web Push VAPID keypair. RLS enabled with **no
+  policies** — unlike everything else in this project, this one is intentionally not
+  client-readable. Only the `send-reminders` edge function's service-role key can read it.
 
 Full schema and the reasoning behind each column lives in `PRD.md` — this is just the list.
+
+## PWA + background reminders
+
+The app is installable (`manifest.webmanifest` + `service-worker.js` at the repo root, icons in
+`icons/`) and pushes real background notifications for due/overdue follow-ups via a Supabase
+Edge Function (`send-reminders`) on a 15-minute `pg_cron` schedule — this fires even with the
+app fully closed, not just while it's open in a tab. See "PWA & background push reminders" in
+`PRD.md` for the full mechanics. When touching this:
+- The service worker only caches the app shell and handles `push`/`notificationclick` — it does
+  not intercept Supabase or CDN requests. Keep it that way; don't make it a general request
+  proxy.
+- The VAPID private key lives only in the `app_secrets` table (service-role-only), never in
+  client code or this repo. The public key is a real constant in `index.html` (`VAPID_PUBLIC_KEY`) —
+  that's expected, VAPID public keys are meant to be public.
+- Regenerating icons requires `@napi-rs/canvas` (`npm i @napi-rs/canvas` in a scratch dir, run
+  `node scripts/generate-icons.js`, then delete `node_modules` again) — it's not a committed
+  dependency since the site has no build step.
 
 ## Security scope — read this before assuming the login gate is "real" access control
 
