@@ -83,14 +83,38 @@ header.top{
 .today{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;padding-bottom:20px}
 .kpi{
   background:var(--panel);border:1px solid var(--line);border-radius:12px;
-  padding:9px 10px;position:relative;overflow:hidden;
+  padding:9px 10px 9px 13px;position:relative;overflow:hidden;
+  border-left:3px solid var(--indigo);
 }
 .kpi .n{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:19px;line-height:1.1}
 .kpi .l{font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-top:3px}
 .kpi .t{font-size:10px;color:var(--muted);opacity:.7}
 .kpi .meter{position:absolute;left:0;bottom:0;height:2px;background:var(--indigo);transition:width .5s var(--ease)}
+.kpi.hit{border-left-color:var(--mint)}
 .kpi.hit .meter{background:var(--mint)}
 .kpi.hit .n{color:var(--mint)}
+
+/* ---------- snapshot dashboard ---------- */
+.snapgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}
+.snapcard{padding:12px 13px 10px;display:flex;flex-direction:column;min-width:0}
+.snapcard .sh{display:flex;align-items:center;gap:7px;margin-bottom:9px}
+.snapcard .sh .ic{width:22px;height:22px;border-radius:7px;display:grid;place-items:center;font-size:11px;flex:none}
+.snapcard .sh h4{margin:0;font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);font-weight:600}
+.snapcard canvas{max-width:100%}
+.funnelrow{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:11px}
+.funnelrow .fl{width:56px;flex:none;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10.5px}
+.funnelrow .fb{flex:1;height:7px;border-radius:99px;background:var(--ink);overflow:hidden}
+.funnelrow .fb i{display:block;height:100%;border-radius:99px;transition:width .5s var(--ease)}
+.funnelrow .fn{width:20px;flex:none;text-align:right;font-family:'JetBrains Mono',monospace;color:var(--text);font-size:10.5px}
+.legendrow{display:flex;align-items:center;gap:7px;font-size:11px;padding:3px 0;color:var(--muted)}
+.legendrow .dot{width:8px;height:8px;border-radius:50%;flex:none}
+.legendrow .ln{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.legendrow .lv{font-family:'JetBrains Mono',monospace;color:var(--text);font-size:10.5px}
+.donutwrap{display:flex;align-items:center;gap:12px;flex:1;min-height:0}
+.donutwrap .dcanvas{width:78px;height:78px;flex:none;position:relative}
+.donutwrap .legend{flex:1;min-width:0}
+@media (max-width:960px){.snapgrid{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:480px){.snapgrid{grid-template-columns:1fr}}
 
 /* ---------- tabs ---------- */
 nav.tabs{display:flex;gap:4px;border-top:1px solid var(--line);padding:8px 0;overflow-x:auto;scrollbar-width:none}
@@ -884,7 +908,26 @@ function viewBoard(){
   visibleForSectors.forEach(l=>{ const s=leadSector(l); if(s) sectorCounts[s]=(sectorCounts[s]||0)+1; });
   const sectors=Object.keys(sectorCounts).sort((a,b)=>Number(a)-Number(b));
   const isDefaultFilter=filter.stage==='all'&&filter.cat==='all'&&filter.batch==='all'&&filter.area==='all'&&filter.sort==='stage'&&!filter.archive&&!filter.q;
+  setTimeout(renderSnapshotPanel,0);
   return `
+  <div class="snapgrid">
+    <div class="block snapcard">
+      <div class="sh"><div class="ic" style="background:rgba(99,102,241,.16);color:var(--indigo-soft)">◆</div><h4>Funnel</h4></div>
+      <div id="snapFunnel"></div>
+    </div>
+    <div class="block snapcard">
+      <div class="sh"><div class="ic" style="background:rgba(56,189,248,.16);color:#7DD3FC">●</div><h4>By category</h4></div>
+      <div class="donutwrap"><div class="dcanvas"><canvas id="snapCategory"></canvas></div><div class="legend" id="snapCategoryLegend"></div></div>
+    </div>
+    <div class="block snapcard">
+      <div class="sh"><div class="ic" style="background:rgba(52,211,153,.16);color:var(--mint)">✓</div><h4>Won / active / lost</h4></div>
+      <div class="donutwrap"><div class="dcanvas"><canvas id="snapWinLoss"></canvas></div><div class="legend" id="snapWinLossLegend"></div></div>
+    </div>
+    <div class="block snapcard">
+      <div class="sh"><div class="ic" style="background:rgba(251,191,36,.16);color:var(--amber)">↗</div><h4>Last 7 days</h4></div>
+      <canvas id="snapTrend" height="90"></canvas>
+    </div>
+  </div>
   <div class="filters">
     <input class="search" id="q" placeholder="Search business, owner, area, phone, notes, history…" value="${esc(filter.q)}">
     <select class="search" id="catFilter" style="flex:0 0 auto;min-width:150px">
@@ -1160,6 +1203,98 @@ async function renderMetricsCharts(weekKey){
         <div><div class="total" style="border:0;padding:0;margin:0"><span class="lab">Revenue this week</span><span class="num" style="color:${weekRev>=floorRev?'var(--mint)':'var(--text)'}">${inr(weekRev)} / ${inr(floorRev)}</span></div></div>
       </div>`;
   }
+}
+
+/* ============================================================
+   SNAPSHOT — compact always-on analytics panel on the Pipeline
+   home screen. Stage/category/won-lost figures come straight from
+   S.leads (instant, no network). The 7-day trend reuses the same
+   activity_log query as the Metrics tab, cached for a minute so
+   re-rendering the board (e.g. while typing a search) doesn't
+   re-fetch on every keystroke.
+   ============================================================ */
+let snapChartInstances={};
+const SNAP_PALETTE=['#6366F1','#34D399','#FBBF24','#F87171','#38BDF8','#C084FC','#818CF8','#A9B4DA','#7DD3FC','#D8B4FE'];
+let snapTrendCache=null, snapTrendCacheAt=0, snapTrendFetching=null;
+async function getSnapTrendData(){
+  const now=Date.now();
+  if(snapTrendCache && (now-snapTrendCacheAt)<60000) return snapTrendCache;
+  if(snapTrendFetching) return snapTrendFetching;
+  snapTrendFetching=fetchMetricsData().then(data=>{ snapTrendCache=data; snapTrendCacheAt=Date.now(); snapTrendFetching=null; return data; });
+  return snapTrendFetching;
+}
+function renderSnapshotFunnel(){
+  const el=$('#snapFunnel'); if(!el) return;
+  const live=S.leads.filter(l=>!l.deletedAt);
+  const counts=STAGES.map(s=>live.filter(l=>l.stage===s.id).length);
+  const max=Math.max(1,...counts);
+  const colors={pipeline:'#6366F1',outreached:'#4C5B8A',warm:'#FBBF24',mockup:'#38BDF8',quoted:'#818CF8',won:'#34D399',upsold:'#C084FC',lost:'#3A4157'};
+  const shortLabels={outreached:'Outreach',mockup:'Mockup'};
+  el.innerHTML=STAGES.map((s,i)=>`
+    <div class="funnelrow">
+      <span class="fl">${shortLabels[s.id]||s.label}</span>
+      <span class="fb"><i style="width:${counts[i]/max*100}%;background:${colors[s.id]}"></i></span>
+      <span class="fn">${counts[i]}</span>
+    </div>`).join('');
+}
+function renderDonut(canvasId,legendId,labels,values,colors){
+  const canvas=$('#'+canvasId), legendEl=$('#'+legendId);
+  if(!canvas||!legendEl) return;
+  if(legendEl) legendEl.innerHTML=labels.map((l,i)=>`
+    <div class="legendrow"><span class="dot" style="background:${colors[i]}"></span><span class="ln">${esc(l)}</span><span class="lv">${values[i]}</span></div>`).join('');
+  if(typeof Chart==='undefined'){ canvas.parentElement.innerHTML='<span style="font-size:10.5px;color:var(--muted)">Charts unavailable</span>'; return; }
+  const key=canvasId;
+  if(snapChartInstances[key]) snapChartInstances[key].destroy();
+  snapChartInstances[key]=new Chart(canvas,{type:'doughnut',data:{labels,datasets:[{data:values,backgroundColor:colors,borderWidth:0}]},
+    options:{responsive:true,maintainAspectRatio:false,cutout:'68%',plugins:{legend:{display:false},tooltip:{enabled:true}}}});
+}
+function renderSnapshotCategory(){
+  const live=S.leads.filter(l=>!l.deletedAt);
+  const counts={};
+  live.forEach(l=>{ const c=l.cat||'Uncategorised'; counts[c]=(counts[c]||0)+1; });
+  const labels=Object.keys(counts).sort((a,b)=>counts[b]-counts[a]).slice(0,6);
+  renderDonut('snapCategory','snapCategoryLegend',labels,labels.map(l=>counts[l]),labels.map((_,i)=>SNAP_PALETTE[i%SNAP_PALETTE.length]));
+}
+function renderSnapshotWinLoss(){
+  const live=S.leads.filter(l=>!l.deletedAt);
+  const won=live.filter(l=>['won','upsold'].includes(l.stage)).length;
+  const lost=live.filter(l=>l.stage==='lost').length;
+  const active=live.length-won-lost;
+  renderDonut('snapWinLoss','snapWinLossLegend',['Won','Active','Lost'],[won,active,lost],['#34D399','#6366F1','#F87171']);
+}
+async function renderSnapshotTrend(){
+  const el=$('#snapTrend'); if(!el) return;
+  if(typeof Chart==='undefined'){ el.parentElement.innerHTML+='<span style="font-size:10.5px;color:var(--muted)">Charts unavailable</span>'; return; }
+  const {activity,manual}=await getSnapTrendData();
+  if(tab!=='board') return;
+  const el2=$('#snapTrend'); if(!el2) return;
+  const days=lastNDays(7);
+  const manualByDate={}; manual.forEach(m=>{ manualByDate[m.date]=m; });
+  const stageEvents=activity.filter(a=>a.action==='update'&&a.field==='stage');
+  const closesOn=d=>stageEvents.filter(a=>dayKey(a.created_at)===d&&(a.new_value==='won'||a.new_value==='upsold')).length;
+  const doorsSeries=days.map(d=>(manualByDate[d]&&manualByDate[d].doors)||0);
+  const closeSeries=days.map(d=>closesOn(d));
+  if(snapChartInstances.trend) snapChartInstances.trend.destroy();
+  snapChartInstances.trend=new Chart(el2,{type:'line',data:{labels:days.map(d=>d.slice(5)),datasets:[
+    {label:'Doors',data:doorsSeries,borderColor:'#6366F1',backgroundColor:'transparent',tension:.3,pointRadius:2},
+    {label:'Closes',data:closeSeries,borderColor:'#34D399',backgroundColor:'transparent',tension:.3,pointRadius:2}
+  ]},options:{responsive:true,plugins:{legend:{position:'bottom',labels:{color:'#868FAB',boxWidth:8,font:{size:9}}}},
+    scales:{x:{ticks:{color:'#868FAB',font:{size:9}},grid:{display:false}},y:{ticks:{color:'#868FAB',font:{size:9}},grid:{color:'#232C45'},beginAtZero:true}}}});
+}
+// Debounced: viewBoard() re-renders wholesale on every search keystroke, and the
+// snapshot doesn't depend on the search text at all — so coalesce rapid rebuilds
+// instead of tearing down and recreating four charts per character typed.
+let snapPanelTimer=null;
+function renderSnapshotPanel(){
+  clearTimeout(snapPanelTimer);
+  snapPanelTimer=setTimeout(()=>{
+    if(tab!=='board') return;
+    if(!$('#snapFunnel')) return;
+    renderSnapshotFunnel();
+    renderSnapshotCategory();
+    renderSnapshotWinLoss();
+    renderSnapshotTrend();
+  },120);
 }
 
 function viewData(){

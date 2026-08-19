@@ -128,6 +128,13 @@ view if it's been explicitly archived (soft-deleted), never just because it's Lo
 - **Money rail** — top-of-dashboard bar chart of closed value / quoted value / pipeline
   potential value.
 - **KPI strip ("Today")** — doors/owner-talks/mockups/quotes/closes today vs. `S.targets`.
+- **Snapshot panel** — always-on analytics row at the top of the Pipeline tab (below the KPI
+  strip, above the filters): a funnel bar-list (count per stage), a category donut, a
+  won/active/lost donut, and a 7-day doors-vs-closes trend line. Stage/category/win-loss
+  figures compute instantly from `S.leads` in memory; only the trend hits Supabase, cached
+  60s so re-rendering the board while typing a search doesn't re-fetch. Rendering is debounced
+  (`renderSnapshotPanel`) since `viewBoard()` rebuilds wholesale on each keystroke. This is the
+  at-a-glance summary — the Metrics tab remains the full-depth view.
 - **Board (Pipeline tab)** — kanban-style card list, filterable by stage/category/batch/sector,
   sortable (see Sorting & filtering below), searchable across business/owner/area/notes/phone
   and each lead's own activity log.
@@ -218,4 +225,7 @@ deliberately not exposed in the app.
 - Board rendering, filters, sort comparators → `viewBoard()`, `SORTERS`, `SORT_LABELS`, near the
   bottom third of the render functions.
 - Metrics/charts → `viewMetrics()` / `renderMetricsCharts()`, just above `viewData()`.
+- Snapshot panel (Pipeline home) → the `SNAPSHOT` section just above `viewData()`:
+  `renderSnapshotPanel()` plus `renderSnapshotFunnel/Category/WinLoss/Trend()` and the shared
+  `renderDonut()` helper; its markup is emitted at the top of `viewBoard()`.
 - Day-to-day workflow rules (branch/push, table list, security caveats) → `CLAUDE.md`.
