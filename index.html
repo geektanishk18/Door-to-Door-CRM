@@ -250,6 +250,8 @@ main{padding-top:28px}
 .lead.s-won{border-left-color:var(--mint)}
 .lead.s-upsold{border-left-color:#C084FC}
 .lead.s-lost{border-left-color:#3A4157;opacity:.55}
+.lead.nerfed{opacity:.5}
+.lead.nerfed:hover{opacity:.7}
 .lead .body{flex:1;min-width:0}
 .lead .biz{font-weight:600;font-size:14.5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .lead .meta{font-size:12px;color:var(--muted);margin-top:3px;display:flex;gap:8px;flex-wrap:wrap}
@@ -264,10 +266,30 @@ main{padding-top:28px}
 .pill.won{background:rgba(52,211,153,.15);color:var(--mint)}
 .pill.upsold{background:rgba(192,132,252,.18);color:#D8B4FE}
 .pill.due{background:rgba(248,113,113,.15);color:var(--rose)}
+.pill.nerfed{background:rgba(92,100,134,.22);color:var(--muted)}
 .lead .val{text-align:right;flex:none}
 .lead .val .amt{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:14px}
 .lead .val .amt.zero{color:var(--muted);font-weight:400}
 .lead .val .up{font-size:10px;color:var(--muted);margin-top:3px;font-family:'JetBrains Mono',monospace}
+
+/* ---------- call log (drawer + card meta) ---------- */
+.meta .callmeta{display:inline-flex;align-items:center;gap:4px}
+.meta .callmeta.stale{color:var(--amber)}
+.calllog{display:flex;flex-direction:column;margin-bottom:2px}
+.callrow{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line);font-size:12.5px}
+.callrow:last-child{border-bottom:0}
+.callrow .cn{font-family:'JetBrains Mono',monospace;color:var(--muted);width:44px;flex:none}
+.callrow .ct{margin-left:auto;color:var(--muted2);font-size:11px;font-family:'JetBrains Mono',monospace}
+.outcome{font-size:9.5px;text-transform:uppercase;letter-spacing:.08em;padding:2.5px 7px;border-radius:5px;font-weight:600}
+.outcome.connected{background:rgba(60,230,166,.15);color:var(--mint)}
+.outcome.no_answer{background:rgba(139,147,180,.16);color:var(--muted)}
+.outcome.voicemail{background:rgba(251,191,36,.15);color:var(--amber)}
+.outcome.bad_number{background:rgba(251,115,115,.15);color:var(--rose)}
+.callpicker{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.callpicker .chip{padding:8px 12px}
+.nerftoggle{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+.nerftoggle .nt{font-size:12.5px;color:var(--muted)}
+.nerftoggle .nt b{color:var(--text);font-weight:500;display:block;font-size:13px}
 
 /* ---------- drawer ---------- */
 .scrim{position:fixed;inset:0;background:rgba(4,7,14,.72);backdrop-filter:blur(3px);z-index:60;opacity:0;pointer-events:none;transition:opacity .25s var(--ease)}
@@ -552,6 +574,13 @@ const UPSELLS=[
   {id:'amc',    name:'Hosting + maintenance (AMC)',    price:1499}
 ];
 const DEFAULT_CATS=['Interior Design','Dental / Clinic','Real Estate','Salon & Spa','Travel Agency','Hotel / Stay','Gym / Fitness','Cafe / Restaurant','Coaching / Institute','Other'];
+const CALL_OUTCOMES=[
+  {id:'connected', label:'Connected'},
+  {id:'no_answer', label:'No answer'},
+  {id:'voicemail', label:'Voicemail'},
+  {id:'bad_number',label:'Bad number'}
+];
+const CALL_OUTCOME_LABEL=Object.fromEntries(CALL_OUTCOMES.map(o=>[o.id,o.label]));
 
 function svgThumb(icon,accent){
   const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 250">
@@ -583,7 +612,8 @@ let S={
   leads:[], templates:[], quotes:[], cats:[...DEFAULT_CATS],
   targets:{...DAILY_TARGETS}, monthGoal:150000
 };
-let tab='board', filter={stage:'all',cat:'all',batch:'all',area:'all',sort:'stage',archive:false,q:''}, openLead=null, draftQuote=null;
+let tab='board', filter={stage:'all',cat:'all',batch:'all',area:'all',sort:'stage',archive:false,nerfed:false,q:''}, openLead=null, draftQuote=null;
+let callPickerOpen=false;
 let cloudClient=null, cloudStatus='off', cloudLastSync=null;
 let adminUsername='';
 let metricsRange=14;
@@ -658,6 +688,7 @@ function leadToRow(l){
     cat:l.cat||'',area:l.area||'',maps:l.maps||'',batch:l.batch||'',source:l.source||'',
     stage:l.stage||'pipeline',next:l.next||null,notes:l.notes||'',
     upsells:l.upsells||[],sales:l.sales||[],log:l.log||[],
+    call_attempts:l.callAttempts||[], nerfed:!!l.nerfed, nerfed_at:l.nerfedAt||null,
     deleted_at:l.deletedAt||null, first_contacted_at:l.firstContactedAt||null,
     created_at:l.createdAt||new Date().toISOString(),updated_at:l.updatedAt||new Date().toISOString()};
 }
@@ -666,6 +697,7 @@ function rowToLead(r){
     cat:r.cat||'',area:r.area||'',maps:r.maps||'',batch:r.batch||'',source:r.source||'',
     stage:r.stage||'pipeline',next:r.next||'',notes:r.notes||'',
     upsells:r.upsells||[],sales:r.sales||[],log:r.log||[],
+    callAttempts:r.call_attempts||[], nerfed:!!r.nerfed, nerfedAt:r.nerfed_at||null,
     sector:r.sector||'', deletedAt:r.deleted_at||null, firstContactedAt:r.first_contacted_at||null,
     createdAt:r.created_at||new Date().toISOString(),updatedAt:r.updated_at||new Date().toISOString()};
 }
@@ -1070,8 +1102,11 @@ function renderToday(){
       <div class="meter" style="width:${Math.min(100,v/tg*100)}%"></div>
     </div>`).join('');
 }
+function dueFollowupCount(){
+  return S.leads.filter(l=>l.next&&l.next<=today()&&!l.deletedAt&&!l.nerfed&&!['won','upsold','lost'].includes(l.stage)).length;
+}
 function renderTabs(){
-  const due=S.leads.filter(l=>l.next&&l.next<=today()&&!['won','upsold','lost'].includes(l.stage)).length;
+  const due=dueFollowupCount();
   const tabs=[
     ['board','Pipeline',S.leads.length],
     ['follow','Follow-ups',due],
@@ -1093,7 +1128,7 @@ const BOTTOMNAV_ICONS={
 };
 function renderBottomNav(){
   const el=$('#bottomNav'); if(!el) return;
-  const due=S.leads.filter(l=>l.next&&l.next<=today()&&!['won','upsold','lost'].includes(l.stage)).length;
+  const due=dueFollowupCount();
   const items=[['board','Board',0],['follow','Follow-ups',due],['quote','Quote',0],['metrics','Metrics',0],['data','More',0]];
   el.innerHTML=items.map(([id,lab,n])=>`
     <button class="bnitem ${tab===id?'on':''}" data-tab="${id}">
@@ -1106,16 +1141,26 @@ function renderBottomNav(){
 /* ============================================================
    RENDER — views
    ============================================================ */
+function callMeta(l){
+  const n=(l.callAttempts||[]).length;
+  if(!n) return '';
+  const last=l.callAttempts[l.callAttempts.length-1];
+  const days=Math.floor((Date.now()-new Date(last.at).getTime())/864e5);
+  const stale=days>=5 && !['won','upsold','lost'].includes(l.stage) && !l.nerfed;
+  const when=days<=0?'today':days===1?'1d ago':`${days}d ago`;
+  return `<span class="callmeta ${stale?'stale':''}">· ☎ ${n} call${n===1?'':'s'}, last ${when}</span>`;
+}
 function leadCard(l){
   const v=leadValue(l), p=pipeValue(l);
-  const due=l.next&&l.next<=today()&&!['won','upsold','lost'].includes(l.stage);
+  const due=l.next&&l.next<=today()&&!l.nerfed&&!['won','upsold','lost'].includes(l.stage);
   const st=STAGES.find(s=>s.id===l.stage);
-  return `<div class="lead s-${l.stage}" data-lead="${l.id}">
+  return `<div class="lead s-${l.stage} ${l.nerfed?'nerfed':''}" data-lead="${l.id}">
     <div class="body">
       <div class="biz">${esc(l.biz||'Untitled')}
         <span class="pill ${['outreached','warm','mockup','quoted','won','upsold'].includes(l.stage)?l.stage:''}">${st?st.label:l.stage}</span>
         ${leadSector(l)?`<span class="pill">Sector ${esc(leadSector(l))}</span>`:''}
         ${due?`<span class="pill due">follow up</span>`:''}
+        ${l.nerfed?`<span class="pill nerfed">🔇 Nerfed</span>`:''}
         ${l.deletedAt?`<span class="pill" style="color:var(--rose)">Archived</span>`:''}
       </div>
       <div class="meta">
@@ -1123,6 +1168,7 @@ function leadCard(l){
         ${l.contact?`<span>· ${esc(l.contact)}</span>`:''}
         ${l.area?`<span>· ${esc(l.area)}</span>`:''}
         ${l.batch?`<span>· 🗂 ${esc(l.batch)}</span>`:''}
+        ${callMeta(l)}
         ${l.maps?`<a href="${esc(l.maps)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:var(--indigo-soft);text-decoration:none">· 📍 Navigate</a>`:''}
       </div>
       ${l.notes?`<div class="note">${esc(l.notes)}</div>`:''}
@@ -1139,6 +1185,7 @@ function viewBoard(){
   const q=filter.q.toLowerCase();
   let rows=S.leads.filter(l=>{
     if(!filter.archive && l.deletedAt) return false;
+    if(!filter.nerfed && l.nerfed) return false;
     if(filter.stage!=='all'&&l.stage!==filter.stage) return false;
     if(filter.cat!=='all'&&l.cat!==filter.cat) return false;
     if(filter.batch!=='all'&&(l.batch||'—')!==filter.batch) return false;
@@ -1156,13 +1203,15 @@ function viewBoard(){
   const sorter=SORTERS[filter.sort]||SORTERS.stage;
   rows.sort(sorter);
 
-  const stageCount=id=>S.leads.filter(l=>l.stage===id&&(filter.archive||!l.deletedAt)).length;
+  const visibleBase=l=>(filter.archive||!l.deletedAt)&&(filter.nerfed||!l.nerfed);
+  const stageCount=id=>S.leads.filter(l=>l.stage===id&&visibleBase(l)).length;
   const batches=[...new Set(S.leads.map(l=>l.batch||'—'))].sort();
-  const visibleForSectors=S.leads.filter(l=>filter.archive||!l.deletedAt);
+  const visibleForSectors=S.leads.filter(visibleBase);
   const sectorCounts={};
   visibleForSectors.forEach(l=>{ const s=leadSector(l); if(s) sectorCounts[s]=(sectorCounts[s]||0)+1; });
   const sectors=Object.keys(sectorCounts).sort((a,b)=>Number(a)-Number(b));
-  const isDefaultFilter=filter.stage==='all'&&filter.cat==='all'&&filter.batch==='all'&&filter.area==='all'&&filter.sort==='stage'&&!filter.archive&&!filter.q;
+  const nerfedCount=S.leads.filter(l=>l.nerfed&&(filter.archive||!l.deletedAt)).length;
+  const isDefaultFilter=filter.stage==='all'&&filter.cat==='all'&&filter.batch==='all'&&filter.area==='all'&&filter.sort==='stage'&&!filter.archive&&!filter.nerfed&&!filter.q;
   setTimeout(renderSnapshotPanel,0);
   return `
   <div class="snapgrid">
@@ -1202,6 +1251,7 @@ function viewBoard(){
       ${Object.keys(SORT_LABELS).map(k=>`<option value="${k}" ${filter.sort===k?'selected':''}>${SORT_LABELS[k]}</option>`).join('')}
     </select>
     <button class="btn sm ${filter.archive?'primary':'ghost'}" id="archiveToggle">${filter.archive?'Archive: ON':'Archive'}</button>
+    ${nerfedCount?`<button class="btn sm ${filter.nerfed?'primary':'ghost'}" id="nerfedToggle">${filter.nerfed?'Nerfed: ON':`Nerfed (${nerfedCount})`}</button>`:''}
     ${isDefaultFilter?'':'<button class="btn sm ghost" id="clearFilters">Clear filters</button>'}
   </div>
   <div class="chiprow">
@@ -1217,7 +1267,7 @@ function viewBoard(){
 }
 
 function viewFollow(){
-  const due=S.leads.filter(l=>l.next&&!l.deletedAt&&!['won','upsold','lost'].includes(l.stage))
+  const due=S.leads.filter(l=>l.next&&!l.deletedAt&&!l.nerfed&&!['won','upsold','lost'].includes(l.stage))
     .sort((a,b)=>a.next<b.next?-1:1);
   const overdue=due.filter(l=>l.next<today());
   const now=due.filter(l=>l.next===today());
@@ -1719,17 +1769,41 @@ document.addEventListener('click',e=>{ if(e.target.closest('#installBtn2')) hand
    ============================================================ */
 function blankLead(){return{id:uid(),biz:'',contact:'',phone:'',email:'',cat:S.cats[0],area:'',maps:'',batch:'',
   source:'Walk-in',stage:'pipeline',next:'',notes:'',upsells:[],sales:[],log:[],
+  callAttempts:[],nerfed:false,nerfedAt:null,
   createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()};}
 
 function openDrawer(lead,isNew){
-  openLead={...lead,upsells:[...(lead.upsells||[])],sales:(lead.sales||[]).map(s=>({...s})),log:[...(lead.log||[])],_new:!!isNew};
+  openLead={...lead,upsells:[...(lead.upsells||[])],sales:(lead.sales||[]).map(s=>({...s})),log:[...(lead.log||[])],
+    callAttempts:(lead.callAttempts||[]).map(c=>({...c})),_new:!!isNew};
   activityLogBaseline=isNew?null:{...lead};
+  callPickerOpen=false;
   $('#drawerTitle').textContent=isNew?'New lead':(lead.biz||'Lead');
   drawDrawer();
   $('#scrim').classList.add('on'); $('#drawer').classList.add('on');
 }
 function closeDrawer(){flushActivityDiff();$('#scrim').classList.remove('on');$('#drawer').classList.remove('on');openLead=null;}
 
+function callLogBlock(l){
+  const attempts=l.callAttempts||[];
+  const n=attempts.length;
+  const nextLabel=n+1>=3?'Log Call 3+':`Log Call ${n+1}`;
+  const rows=attempts.slice().reverse().map(c=>`
+    <div class="callrow">
+      <span class="cn">Call ${c.n}</span>
+      <span class="outcome ${esc(c.outcome)}">${esc(CALL_OUTCOME_LABEL[c.outcome]||c.outcome)}</span>
+      <span class="ct">${new Date(c.at).toLocaleString('en-IN',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</span>
+    </div>`).join('');
+  return `<div class="block">
+    <h4>Call log${n?` — ${n} attempt${n===1?'':'s'}`:''}</h4>
+    ${rows?`<div class="calllog">${rows}</div>`:'<div style="font-size:12.5px;color:var(--muted)">No calls logged yet</div>'}
+    ${callPickerOpen
+      ? `<div class="callpicker">
+          ${CALL_OUTCOMES.map(o=>`<button class="chip" data-callout="${o.id}">${o.label}</button>`).join('')}
+          <button class="chip" data-callcancel>Cancel</button>
+        </div>`
+      : `<button class="btn sm primary" style="margin-top:8px" data-logcall>${nextLabel}</button>`}
+  </div>`;
+}
 function drawDrawer(){
   const l=openLead; if(!l) return;
   const val=leadValue(l), pot=pipeValue(l);
@@ -1767,7 +1841,13 @@ function drawDrawer(){
         <button class="btn sm ghost" data-snooze="7">+1 week</button>
         <button class="btn sm ghost" data-mockup>Log mockup delivered</button>
       </div>
+      <div class="nerftoggle">
+        <div class="nt"><b>${l.nerfed?'Nerfed':'Nerf this lead'}</b>${l.nerfed?'Hidden from Follow-ups, reminders and the default board':'Deprioritize without changing stage — drops out of Follow-ups/reminders'}</div>
+        <button class="btn sm ${l.nerfed?'primary':'ghost'}" data-nerf="${l.nerfed?'0':'1'}">${l.nerfed?'Un-nerf':'Nerf'}</button>
+      </div>
     </div>
+
+    ${callLogBlock(l)}
 
     <div class="block">
       <h4>Notes from the floor</h4>
@@ -1849,7 +1929,8 @@ document.addEventListener('click',async e=>{
   if(d.area){ filter.area=d.area; saveFilters(); render(); return; }
   if(d.mrange){ metricsRange=Number(d.mrange); render(); return; }
   if(t.id==='archiveToggle'){ filter.archive=!filter.archive; saveFilters(); render(); return; }
-  if(t.id==='clearFilters'){ filter={stage:'all',cat:'all',batch:'all',area:'all',sort:'stage',archive:false,q:''}; saveFilters(); render(); return; }
+  if(t.id==='nerfedToggle'){ filter.nerfed=!filter.nerfed; saveFilters(); render(); return; }
+  if(t.id==='clearFilters'){ filter={stage:'all',cat:'all',batch:'all',area:'all',sort:'stage',archive:false,nerfed:false,q:''}; saveFilters(); render(); return; }
   if(d.lead){ const l=S.leads.find(x=>x.id===d.lead); if(l) openDrawer(l,false); return; }
 
   /* drawer interactions */
@@ -1878,6 +1959,25 @@ document.addEventListener('click',async e=>{
     if(['pipeline','outreached','warm'].includes(openLead.stage)){ openLead.stage='mockup'; log(openLead,'Stage → Mockup Pending'); }
     if(!openLead.next){ const n=new Date(); n.setDate(n.getDate()+1); openLead.next=n.toISOString().slice(0,10); }
     syncOpenLead(); drawDrawer(); toast('Mockup logged'); return;
+  }
+  if(t.hasAttribute('data-logcall')&&openLead){ callPickerOpen=true; drawDrawer(); return; }
+  if(t.hasAttribute('data-callcancel')&&openLead){ callPickerOpen=false; drawDrawer(); return; }
+  if(d.callout&&openLead){
+    const n=(openLead.callAttempts||[]).length+1;
+    const entry={n,at:new Date().toISOString(),outcome:d.callout,notes:''};
+    openLead.callAttempts=[...(openLead.callAttempts||[]),entry];
+    const outLabel=CALL_OUTCOME_LABEL[d.callout]||d.callout;
+    log(openLead,`Call ${n} logged — ${outLabel}`);
+    logActivity('update',{leadId:openLead.id,biz:openLead.biz,field:'call_attempts',newValue:`Call ${n}: ${outLabel}`,message:`Call ${n} logged — ${outLabel}`});
+    callPickerOpen=false;
+    syncOpenLead(); drawDrawer(); toast(`Call ${n} logged — ${outLabel}`); return;
+  }
+  if(d.nerf!=null&&openLead){
+    const on=d.nerf==='1';
+    openLead.nerfed=on; openLead.nerfedAt=on?new Date().toISOString():null;
+    log(openLead,on?'Nerfed — deprioritized':'Un-nerfed');
+    logActivity('update',{leadId:openLead.id,biz:openLead.biz,field:'nerfed',oldValue:String(!on),newValue:String(on),message:on?'Lead nerfed — deprioritized':'Lead un-nerfed'});
+    syncOpenLead(); drawDrawer(); toast(on?'Lead nerfed':'Lead un-nerfed'); return;
   }
   if(d.sdel!=null&&openLead){ openLead.sales.splice(Number(d.sdel),1); syncOpenLead(); drawDrawer(); return; }
   if(t.id==='addSale'&&openLead){ openLead.sales.push({item:'',amount:0,received:0,date:today()}); syncOpenLead(); drawDrawer(); return; }

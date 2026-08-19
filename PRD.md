@@ -76,6 +76,9 @@ that possible.
 | log | jsonb | short per-lead activity mirror, newest first — see Logging below |
 | **deleted_at** | timestamptz, nullable | soft-delete marker. Non-null = archived, hidden from Board/Follow-ups by default, recoverable via the Archive toggle. **Nothing is ever hard-deleted by the app.** |
 | **first_contacted_at** | timestamptz, nullable | set the first time a lead's stage moves away from `pipeline` — the real "when did outreach start" date, distinct from `created_at` (which for bulk-scraped leads is just when the row was added, often before anyone knocked). |
+| **call_attempts** | jsonb | array of `{n, at, outcome, notes}` — one entry per logged call, `n` sequential starting at 1, `outcome` one of `connected` / `no_answer` / `voicemail` / `bad_number`. Logged from the drawer's Call Log widget, never edited/deleted after the fact — same permanence rule as everything else here. |
+| **nerfed**, **nerfed_at** | boolean, timestamptz nullable | manual deprioritize flag — independent of `stage` (a nerfed lead can still be Warm/Outreached/etc). Drops the lead out of Follow-ups, the due-count badges, and background push reminders; still visible on the Board (muted card treatment) unless the Nerfed filter is off. Distinct from `Lost`, which means the deal is actually dead. |
+| **last_reminder_pushed_on** | date, nullable | server-managed only (never written by the client) — set by the `send-reminders` edge function once a push has gone out for that lead's due/overdue follow-up today, so the 15-min cron doesn't re-notify. |
 | created_at, updated_at | timestamptz | standard timestamps |
 
 RLS: `using(true) with check(true)` — fully open. See Security scope below.
@@ -149,9 +152,10 @@ CDN requests, so sync/auth behavior is unaffected.
 
 Reminders are real background push, not just an in-app banner: a Supabase Edge Function
 (`send-reminders`) runs on a `pg_cron` schedule every 15 minutes, finds leads whose follow-up
-is due today or overdue, and sends a Web Push notification (via the `web-push` npm package,
-VAPID-signed) to every subscribed device — this fires even if the app/browser is fully closed,
-as long as it was installed and reminders were turned on once. See the table docs above for
+is due today or overdue (excluding nerfed leads — see `leads.nerfed` above), and sends a Web
+Push notification (via the `web-push` npm package, VAPID-signed) to every subscribed device —
+this fires even if the app/browser is fully closed, as long as it was installed and reminders
+were turned on once. See the table docs above for
 `push_subscriptions` / `app_secrets` / `last_reminder_pushed_on`, and
 `supabase/migrations` (applied via the Supabase MCP, not checked into this repo as files) for
 the exact cron/extension setup. Local notifications (falling back to nothing when a device
@@ -189,7 +193,22 @@ view if it's been explicitly archived (soft-deleted), never just because it's Lo
 - **Board (Pipeline tab)** — kanban-style card list, filterable by stage/category/batch/sector,
   sortable (see Sorting & filtering below), searchable across business/owner/area/notes/phone
   and each lead's own activity log.
-- **Follow-ups tab** — Overdue / Today / Upcoming, driven by `next`.
+- **Follow-ups tab** — Overdue / Today / Upcoming, driven by `next`. Nerfed leads (see below)
+  never appear here regardless of `next`.
+- **Call log** — a per-lead drawer widget (Stage block area) that logs sequential call
+  attempts (`Log Call 1` → `Log Call 2` → …, capped at "3+" once you're past attempt 2) with a
+  one-tap outcome picker (Connected / No answer / Voicemail / Bad number). Each tap writes an
+  `activity_log` row immediately (not diffed/debounced, same treatment as stage changes) and
+  appends to `leads.call_attempts` — never edited or removed after the fact. The board card
+  shows a small "☎ N calls, last Xd ago" line in the meta row, turning amber once it's been 5+
+  days since the last attempt on a still-open lead.
+- **Nerf** — a manual "deprioritize without changing stage" flag (`leads.nerfed`/`nerfed_at`),
+  toggled from the same Stage block as the call log. Distinct from the `Lost` stage: a nerfed
+  lead can still technically be Warm/Outreached/etc, it just stops surfacing in Follow-ups, the
+  due-count badges (header tab + bottom nav), and background push reminders. On the Board it's
+  hidden by default — same UI pattern as the Archive toggle — behind a "Nerfed (N)" filter chip
+  that only appears once at least one lead is nerfed; revealing it shows the card with a muted/
+  dimmed treatment and a "🔇 Nerfed" pill so it stays visually distinct even when shown.
 - **Template vault** — 5 live Vercel-hosted template sites (salon, travel, hotel, real estate,
   interior design), each with a preview thumbnail, shown on the phone during a pitch.
 - **Quotation builder** — line-item builder with presets from the `UPSELLS` catalog, PDF export
@@ -220,7 +239,9 @@ view if it's been explicitly archived (soft-deleted), never just because it's Lo
   stage changes. Text-field edits are diffed against a per-drawer-session baseline and
   coalesced on the same ~600ms debounce as autosave, so typing doesn't spam one row per
   keystroke — one row is written per field that actually changed once things settle. Stage
-  changes are logged immediately (not debounced) since they're discrete button clicks.
+  changes are logged immediately (not debounced) since they're discrete button clicks. Call log
+  entries and nerf toggles are the same — logged immediately on tap, and deliberately excluded
+  from the generic diff loop (`FIELD_LABELS`) so they're never double-logged.
 - **Delete** — archiving a lead ("Archive" button in the drawer, formerly "Delete"), and
   triggering "Reset everything" in Settings (which logs before wiping local state, even though
   Reset itself doesn't touch Supabase rows — see Soft delete below for why this is safe).
