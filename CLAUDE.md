@@ -13,6 +13,39 @@ see **`PRD.md`** — this file is deliberately just the operational rules.
 - Test changes locally by opening `index.html` in a browser (or `python3 -m http.server`) before
   pushing.
 
+## Documentation & QA gate — before every push
+
+Documentation and QA are part of the change, not follow-up work. Do both in the same commit
+as the code, never a trailing commit.
+
+**Docs:**
+- `PRD.md` — data model / feature inventory. Update whenever a schema field, table, or
+  user-facing feature changes. Must never drift from what's actually in `index.html`.
+- `CLAUDE.md` — update only when the workflow, architecture, or security posture itself
+  changes.
+- `CHANGELOG.md` — one entry per commit that ships anything user-visible or schema-affecting
+  (Keep-a-Changelog style). Skip pure formatting/typo fixes. Write for a reader with no memory
+  of how the change came about.
+- `DEVLOG.md` — for any non-trivial decision or rejected approach, a short dated "why" entry —
+  distinct from CHANGELOG's "what."
+
+**QA, before pushing:**
+- Actually run the app (open `index.html` / `python3 -m http.server`) — don't rely on a
+  read-through of the diff alone.
+- Exercise the golden paths, not just the changed feature in isolation: login gate, board
+  filters/sort/sector chips, lead drawer edit-and-persist, archive/restore, call log widget,
+  the AI outreach layer including its failure state, Metrics charts, PWA install + push
+  reminders. Zero tolerance for browser console errors — don't dismiss one as "harmless"
+  without explaining why.
+- Grep the diff for any new API key or secret hardcoded client-side. Only `SUPABASE_URL`,
+  `SUPABASE_ANON_KEY`, and `VAPID_PUBLIC_KEY` are allowed to be public — everything else
+  (Groq, Places, or any other provider key) must live server-side in an Edge Function, same
+  rule that already governs the VAPID private key in `app_secrets`.
+- Re-check PRD.md's feature inventory for regressions beyond the immediate diff.
+- End with a verdict — SHIP / DO NOT SHIP / SHIP WITH CAVEATS — and list any bugs found. If a
+  browser smoke test genuinely couldn't be run (environment limitation), say so explicitly
+  rather than implying it was verified.
+
 ## Cloud sync
 
 The app connects to a Supabase project automatically — the URL and anon key are hardcoded as
